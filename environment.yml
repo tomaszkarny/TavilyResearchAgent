@@ -12,3 +12,5 @@ dependencies:
   - pip
   - pip:
       - tavily-python==0.3.7
+      - pymongo
+      - cohere

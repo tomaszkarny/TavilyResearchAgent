@@ -9,7 +9,7 @@ def get_mongodb_client():
     client = MongoClient(os.getenv('MONGODB_URI'))
     return client
 
-def get_collection(collection_name="research_data"):
+def get_collection(collection_name="test_collection"):
     """Get MongoDB collection"""
     client = get_mongodb_client()
     db = client[os.getenv('MONGODB_DB_NAME', 'research_db')]
