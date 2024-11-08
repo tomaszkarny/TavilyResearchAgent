@@ -1,0 +1,14 @@
+name: research-assistant
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pymongo=4.10.1
+  - python-dotenv=1.0.0
+  - pytest=7.4.3
+  - black=23.12.1
+  - ipykernel
+  - pip
+  - pip:
+      - tavily-python==0.3.7
