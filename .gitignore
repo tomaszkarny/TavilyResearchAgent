@@ -47,6 +47,7 @@ htmlcov/
 .settings/
 *.sublime-workspace
 *.sublime-project
+.cursorrules
 
 # OS generated files
 .DS_Store
