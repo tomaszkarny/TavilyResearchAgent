@@ -1,219 +1,130 @@
 # src/research/database/db.py
 """
-Database operations for research data with improved metadata handling and debug logging
+Database operations with basic search support for MongoDB Atlas Basic Plan
 """
-import os
+from typing import List, Dict, Optional
 from datetime import datetime
-from typing import List, Dict
-from urllib.parse import urlparse
-from pymongo import MongoClient
-from dotenv import load_dotenv
 import logging
-import json
+from pymongo import MongoClient, ASCENDING, TEXT
+import os
+from dotenv import load_dotenv
+from bson.objectid import ObjectId
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ResearchDatabase:
-    """Handles database operations for research data"""
+    """MongoDB database with basic search capabilities"""
     
     def __init__(self):
-        """Initialize database connection"""
-        load_dotenv()
+        """Initialize database connection and collections"""
         self.client = MongoClient(os.getenv('MONGODB_URI'))
         self.db = self.client[os.getenv('MONGODB_DB_NAME', 'research_db')]
         
         # Collections
-        self.sessions = self.db['research_sessions']
-        self.articles = self.db['research_articles']
+        self.sessions = self.db.sessions
+        self.articles = self.db.articles
         
+        # Ensure indexes
+        self._setup_indexes()
         logger.info("Research database initialized")
     
-    def save_research_session(self, results: List[Dict], query: str) -> str:
-        """
-        Save research results with enhanced metadata handling
+    def _setup_indexes(self):
+        """Setup required database indexes"""
+        # Session indexes
+        self.sessions.create_index([("timestamp", ASCENDING)])
         
-        Args:
-            results: List of search results from Tavily
-            query: Original search query
-            
-        Returns:
-            str: Session ID
-        """
+        # Article indexes
+        self.articles.create_index([("session_id", ASCENDING)])
+        self.articles.create_index([("url", ASCENDING)])
+        
+        # Text search index
         try:
-            # Debug: Log received results
-            logger.debug("Received results for saving:")
-            logger.debug(json.dumps(results, indent=2, default=str))
-            
+            self.articles.create_index([
+                ("content", TEXT),
+                ("title", TEXT)
+            ])
+            logger.info("Text search index created successfully")
+        except Exception as e:
+            logger.error(f"Text index creation failed: {e}")
+            raise
+    
+    def save_research_session(self, results: List[Dict], query: str) -> str:
+        """Save research results"""
+        try:
             # Create session record
             session = {
                 'query': query,
                 'timestamp': datetime.utcnow(),
-                'source': 'tavily',
+                'source': 'hybrid',
                 'processed': False,
                 'article_count': len(results)
             }
             
-            session_id = self.sessions.insert_one(session).inserted_id
-            str_session_id = str(session_id)
+            session_id = str(self.sessions.insert_one(session).inserted_id)
+            logger.info(f"Created research session: {session_id}")
             
-            logger.info(f"Created research session: {str_session_id}")
-            
-            # Save each article with enhanced metadata
+            # Save articles
             for result in results:
-                # Debug: Log raw result before processing
-                logger.debug(f"Processing result: {json.dumps(result, indent=2, default=str)}")
-                
-                article = self._format_article(result, str_session_id)
+                article = {
+                    'session_id': session_id,
+                    'title': result.get('title', 'N/A'),
+                    'url': result.get('url', 'N/A'),
+                    'content': result.get('content', ''),
+                    'score': result.get('score', 0),
+                    'source': result.get('source', 'web'),
+                    'metadata': result.get('metadata', {}),
+                    # Store embeddings as regular field
+                    'embedding_data': result.get('embedding', [])
+                }
                 self.articles.insert_one(article)
             
-            logger.info(f"Saved {len(results)} articles for session {str_session_id}")
-            return str_session_id
+            logger.info(f"Saved {len(results)} articles for session {session_id}")
+            return session_id
             
         except Exception as e:
-            logger.error(f"Error saving research session: {str(e)}")
+            logger.error(f"Error saving research session: {e}")
             raise
     
-    def _format_article(self, result: Dict, session_id: str) -> Dict:
-        """
-        Format article data with enhanced metadata handling
-        
-        Args:
-            result: Single result from Tavily API
-            session_id: ID of the research session
-        """
+    def get_session(self, session_id: str) -> Optional[Dict]:
+        """Get session by ID"""
         try:
-            # Extract basic information
-            title = result.get('title', '')
-            url = result.get('url', '')
-            content = result.get('content', '')
-            raw_content = result.get('raw_content', '')
-            
-            # Log extraction of key fields
-            logger.debug(f"Extracting data for article:")
-            logger.debug(f"Title: {title}")
-            logger.debug(f"URL: {url}")
-            logger.debug(f"Content length: {len(content)}")
-            
-            # Format the article data
-            article_data = {
-                'session_id': session_id,
-                'title': title,  # Store title at top level
-                'url': url,      # Store URL at top level
-                'content': {
-                    'title': title,
-                    'full_text': content,
-                    'raw_content': raw_content,
-                    'summary': content[:500] if content else '',
-                    'key_points': []
-                },
-                'metadata': {
-                    'url': url,
-                    'domain': self._extract_domain(url),
-                    'author': result.get('author', ''),
-                    'published_date': result.get('published_date'),
-                    'retrieved_date': datetime.utcnow(),
-                    'relevance_score': result.get('score', 0),
-                    'source': 'tavily'
-                },
-                'analysis': {
-                    'processed': False,
-                    'sentiment': None,
-                    'topics': [],
-                    'llm_notes': None
-                }
-            }
-            
-            # Log formatted article data
-            logger.debug(f"Formatted article data: {json.dumps(article_data, indent=2, default=str)}")
-            
-            return article_data
-            
+            return self.sessions.find_one({"_id": ObjectId(session_id)})
         except Exception as e:
-            logger.error(f"Error formatting article: {str(e)}")
-            logger.error(f"Problematic result: {json.dumps(result, indent=2, default=str)}")
-            raise
+            logger.error(f"Error getting session: {e}")
+            return None
     
-    def _extract_domain(self, url: str) -> str:
-        """Extract domain from URL"""
+    def get_articles(self, session_id: str) -> List[Dict]:
+        """Get articles for a session"""
         try:
-            return urlparse(url).netloc
-        except:
-            return ''
+            return list(self.articles.find({"session_id": session_id}))
+        except Exception as e:
+            logger.error(f"Error getting articles: {e}")
+            return []
     
-    def get_session_data(self, session_id: str) -> Dict:
+    def text_search(self, query: str, limit: int = 5) -> List[Dict]:
         """
-        Get all data for a research session
+        Perform text search on articles
         
         Args:
-            session_id: Session ID to retrieve
+            query: Search query
+            limit: Maximum number of results
             
         Returns:
-            Dict containing session and article data
+            List of matching documents
         """
         try:
-            # Get session
-            session = self.sessions.find_one({"_id": session_id})
-            if not session:
-                raise ValueError(f"Session {session_id} not found")
+            results = list(self.articles.find(
+                {"$text": {"$search": query}},
+                {"score": {"$meta": "textScore"}}
+            ).sort([("score", {"$meta": "textScore"})]).limit(limit))
             
-            # Get articles
-            articles = list(self.articles.find({"session_id": str(session_id)}))
-            
-            return {
-                "session": session,
-                "articles": articles,
-                "article_count": len(articles)
-            }
+            logger.info(f"Found {len(results)} articles in text search")
+            return results
             
         except Exception as e:
-            logger.error(f"Error retrieving session data: {str(e)}")
-            raise
-
-def test_database():
-    """Test database functionality with sample data"""
-    db = ResearchDatabase()
-    
-    # Test data with complete metadata
-    test_results = [
-        {
-            "title": "Test Article",
-            "url": "https://example.com/article",
-            "content": "Test content",
-            "score": 0.95,
-            "metadata": {
-                "author": "John Doe",
-                "published_date": "2024-01-01"
-            }
-        }
-    ]
-    
-    try:
-        # Save test session
-        session_id = db.save_research_session(test_results, "test query")
-        logger.info(f"Test session saved with ID: {session_id}")
-        
-        # Retrieve and verify data
-        session_data = db.get_session_data(session_id)
-        logger.info(f"Retrieved {session_data['article_count']} articles")
-        
-        # Print first article data
-        if session_data['articles']:
-            article = session_data['articles'][0]
-            logger.info("First article data:")
-            logger.info(f"Title: {article.get('title')}")
-            logger.info(f"URL: {article.get('url')}")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Test failed: {str(e)}")
-        return False
-
-if __name__ == "__main__":
-    # Set debug logging for testing
-    logging.getLogger(__name__).setLevel(logging.DEBUG)
-    
-    success = test_database()
-    print(f"Database test {'passed' if success else 'failed'}")
+            logger.error(f"Text search failed: {e}")
+            return []

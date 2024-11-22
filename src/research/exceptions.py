@@ -21,3 +21,7 @@ class DatabaseError(ResearchError):
 class ConfigurationError(ResearchError):
     """Raised when configuration is invalid or missing"""
     pass
+
+class ProcessingError(Exception):
+    """Custom exception for research data processing errors"""
+    pass
