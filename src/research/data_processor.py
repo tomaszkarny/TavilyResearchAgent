@@ -1,242 +1,282 @@
 # src/research/data_processor.py
-"""
-Data processor for extracting and preparing research data for LLM consumption
-"""
+
 from typing import List, Dict, Optional
-import logging
 from datetime import datetime
-import json
+from pydantic import BaseModel, Field
+from openai import OpenAI
+import logging
 from .database.db import ResearchDatabase
 from .exceptions import ProcessingError
+from .utils import retry
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class ResearchDataProcessor:
-    """Processes research data for LLM consumption"""
+class ArticleAnalysis(BaseModel):
+    """Enhanced schema for detailed article analysis"""
+    main_points: List[str] = Field(
+        description="Detailed key findings and insights from the article",
+        min_items=10,
+        max_items=15
+    )
+    summary: str = Field(
+        description="Comprehensive summary of the article content",
+        max_length=1000
+    )
+    key_statistics: List[str] = Field(
+        description="Important numbers, percentages, and statistics from the article",
+        min_items=0,
+        max_items=10
+    )
+    practical_tips: List[str] = Field(
+        description="Actionable advice and practical recommendations",
+        min_items=0,
+        max_items=10
+    )
+    expert_opinions: List[Dict[str, str]] = Field(
+        description="Expert quotes and opinions mentioned in the article",
+        default_factory=list
+    )
+    relevance: float = Field(
+        description="Relevance score from 0 to 1",
+        ge=0.0,
+        le=1.0
+    )
+
+class BlogSection(BaseModel):
+    """Schema for blog section"""
+    heading: str = Field(description="Section heading")
+    content: str = Field(description="Section content")
+    key_points: List[str] = Field(description="Key points of the section")
+
+class BlogPost(BaseModel):
+    """Schema for blog post generation"""
+    title: str = Field(description="Blog post title")
+    introduction: str = Field(description="Opening paragraph")
+    key_sections: List[BlogSection] = Field(description="Blog sections")
+    conclusion: str = Field(description="Closing paragraph")
+
+class MiniProcessor:
+    """Process research data using GPT-4o-mini model"""
     
     def __init__(self):
-        """Initialize processor"""
         self.db = ResearchDatabase()
+        self.client = OpenAI()
+        self.model = "gpt-4o-mini-2024-07-18"
     
-    def get_session_data(self, session_id: str) -> Dict:
-        """
-        Get full session data including all articles
-        
-        Args:
-            session_id: Database session ID
-            
-        Returns:
-            Dict containing session and article data
-        """
-        session = self.db.get_session(session_id)
-        if not session:
-            raise ProcessingError(f"Session {session_id} not found")
-            
-        articles = self.db.get_articles(session_id)
-        return {
-            'session': session,
-            'articles': articles
-        }
-    
-    def prepare_llm_context(self, session_id: str, max_tokens: int = 4000) -> str:
-        """
-        Prepare research data as context for LLM
-        
-        Args:
-            session_id: Database session ID
-            max_tokens: Maximum tokens for context window
-            
-        Returns:
-            Formatted context string for LLM
-        """
+    @retry(max_attempts=3, delay=1)
+    def process_article(self, content: str, title: str, url: str) -> Dict:
+        """Process single article using structured outputs"""
         try:
-            # Get data
-            data = self.get_session_data(session_id)
-            query = data['session'].get('query', '')
-            articles = data['articles']
-            
-            # Create structured context
-            context = [
-                f"Research Topic: {query}\n",
-                f"Number of Sources: {len(articles)}\n",
-                "Key Information from Sources:\n\n"
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are a precise research analyst. Analyze the article and extract information in the following structured format:
+
+                    1. REQUIRED - Main Points (MUST provide at least 10, up to 15 points):
+                       - Extract detailed insights, not just surface information
+                       - Each point should be a complete, informative sentence
+                       - Cover different aspects of the topic
+                       - Include both general and specific information
+
+                    2. REQUIRED - Summary (max 1000 chars):
+                       - Comprehensive yet concise
+                       - Cover key themes and findings
+                       - Maintain academic tone
+
+                    3. REQUIRED - Key Statistics:
+                       - Extract ALL numerical data
+                       - Include percentages, numbers, and measurements
+                       - Format as "X% of..." or "X people..."
+                       - If no statistics found, provide empty array
+
+                    4. REQUIRED - Practical Tips:
+                       - Minimum 3 actionable recommendations
+                       - Start each with a verb
+                       - Be specific and implementable
+                       - If none found, derive from content
+
+                    5. Expert Opinions:
+                       - Include any quoted experts
+                       - Format as {"expert": "Name/Title", "quote": "Exact quote"}
+                       - If no direct quotes, look for paraphrased expert opinions
+
+                    6. REQUIRED - Relevance Score (0.0-1.0):
+                       - Based on content relevance to query
+                       - Consider depth and specificity
+
+                    Return as JSON matching exactly this schema:
+                    {
+                        "main_points": ["point1", "point2", ...], // MINIMUM 10 points
+                        "summary": "text",
+                        "key_statistics": ["stat1", "stat2", ...],
+                        "practical_tips": ["tip1", "tip2", ...],
+                        "expert_opinions": [{"expert": "name", "quote": "text"}, ...],
+                        "relevance": float
+                    }"""
+                },
+                {
+                    "role": "user",
+                    "content": f"Title: {title}\n\nContent: {content}"
+                }
             ]
+
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.7
+            )
             
-            # Process each article
-            for idx, article in enumerate(articles, 1):
-                # Extract key metadata
-                title = article.get('title', 'Untitled')
-                url = article.get('url', 'No URL')
-                score = article.get('score', 0)
-                
-                # Format article section
-                article_section = [
-                    f"Source {idx}:",
-                    f"Title: {title}",
-                    f"URL: {url}",
-                    f"Relevance Score: {score:.2f}",
-                    "Content Summary:",
-                    f"{self._extract_key_points(article.get('content', ''))}\n"
-                ]
-                
-                context.extend(article_section)
+            # Parse response
+            response_content = completion.choices[0].message.content
+            analysis = ArticleAnalysis.model_validate_json(response_content)
             
-            # Add processing instructions
-            context.extend([
-                "\nInstructions for Content Generation:",
-                "1. Use the above information to create comprehensive content",
-                "2. Maintain factual accuracy and cite sources appropriately",
-                "3. Follow proper blog post structure",
-                "4. Include relevant examples and explanations",
-                f"\nOriginal Query: {query}"
-            ])
-            
-            return "\n".join(context)
-            
-        except Exception as e:
-            logger.error(f"Error preparing LLM context: {str(e)}")
-            raise ProcessingError(f"Failed to prepare context: {str(e)}")
-    
-    def _extract_key_points(self, content: str, max_points: int = 5) -> str:
-        """
-        Extract key points from content
-        
-        Args:
-            content: Article content
-            max_points: Maximum number of key points
-            
-        Returns:
-            Formatted key points string
-        """
-        if not content:
-            return "No content available"
-            
-        # Simple extractive summarization
-        sentences = content.split('.')
-        key_sentences = []
-        
-        for sentence in sentences[:max_points]:
-            sentence = sentence.strip()
-            if len(sentence) > 10:  # Ignore very short sentences
-                key_sentences.append(f"• {sentence}")
-        
-        return "\n".join(key_sentences)
-    
-    def save_processed_data(self, 
-                          session_id: str,
-                          processed_content: str,
-                          metadata: Optional[Dict] = None) -> str:
-        """
-        Save processed data back to database
-        
-        Args:
-            session_id: Database session ID
-            processed_content: Processed content
-            metadata: Additional metadata
-            
-        Returns:
-            ID of saved processed content
-        """
-        try:
-            # Update session with processed content
-            processed_data = {
-                'session_id': session_id,
-                'content': processed_content,
-                'metadata': metadata or {},
-                'processed_at': datetime.utcnow()
+            # Create article document with metadata
+            processed_article = {
+                "title": title,
+                "url": url,
+                "summary": {
+                    "main_points": analysis.main_points,
+                    "summary": analysis.summary,
+                    "key_statistics": analysis.key_statistics,
+                    "practical_tips": analysis.practical_tips,
+                    "expert_opinions": analysis.expert_opinions
+                },
+                "score": analysis.relevance,
+                "metadata": {
+                    "published_date": "N/A",  # We don't have this from input
+                    "added_date": datetime.utcnow().isoformat(),
+                    "source": "web",
+                    "language": "en"
+                },
+                "processed_at": datetime.utcnow()
             }
             
-            result = self.db.articles.insert_one(processed_data)
-            logger.info(f"Saved processed content with ID: {result.inserted_id}")
-            
-            return str(result.inserted_id)
+            logger.info(f"Successfully processed article: {title}")
+            return processed_article
             
         except Exception as e:
-            logger.error(f"Error saving processed data: {str(e)}")
-            raise ProcessingError(f"Failed to save processed data: {str(e)}")
-    
-    def export_for_blog(self, session_id: str, format: str = 'json') -> str:
-        """
-        Export processed data in blog-friendly format
-        
-        Args:
-            session_id: Database session ID
-            format: Export format ('json' or 'markdown')
-            
-        Returns:
-            Formatted content string
-        """
+            logger.error(f"Error processing article {title}: {e}")
+            raise ProcessingError(f"Failed to process article: {str(e)}")
+
+    def process_and_save_session(self, session_id: str) -> str:
+        """Process all articles in session and save results"""
         try:
-            data = self.get_session_data(session_id)
+            # Update session status
+            self.db.update_session(
+                session_id=session_id,
+                update_data={'status': 'processing'}
+            )
             
-            if format == 'json':
-                blog_data = {
-                    'topic': data['session'].get('query', ''),
-                    'sources': [
-                        {
-                            'title': article.get('title'),
-                            'url': article.get('url'),
-                            'key_points': self._extract_key_points(article.get('content', ''))
+            # Get articles
+            articles = self.db.get_articles(session_id)
+            if not articles:
+                raise ProcessingError("No articles found in session")
+
+            processed_articles = []
+            failed_articles = []
+            
+            # Process each article
+            for article in articles:
+                try:
+                    processed = self.process_article(
+                        content=article['content'],
+                        title=article['title'],
+                        url=article['url']
+                    )
+                    processed_articles.append(processed)
+                    
+                    # Update progress
+                    self.db.update_session(
+                        session_id=session_id,
+                        update_data={
+                            'processed_count': len(processed_articles),
+                            'total_count': len(articles)
                         }
-                        for article in data['articles']
-                    ],
-                    'metadata': {
-                        'created_at': datetime.utcnow().isoformat(),
-                        'source_count': len(data['articles'])
-                    }
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process article {article['title']}: {e}")
+                    failed_articles.append({
+                        'title': article['title'],
+                        'error': str(e)
+                    })
+
+            # Create final summary
+            summary = {
+                'topic': self.db.get_session(session_id)['query'],
+                'key_findings': self._extract_key_findings(processed_articles),
+                'articles': processed_articles,
+                'created_at': datetime.utcnow()
+            }
+
+            # Save final results
+            self.db.update_session(
+                session_id=session_id,
+                update_data={
+                    'processed_data': summary,
+                    'status': 'completed',
+                    'processed_at': datetime.utcnow(),
+                    'failed_articles': failed_articles,
+                    'success_rate': len(processed_articles) / len(articles)
                 }
-                return json.dumps(blog_data, indent=2)
-                
-            elif format == 'markdown':
-                md_lines = [
-                    f"# Research: {data['session'].get('query', '')}\n",
-                    "## Sources\n"
-                ]
-                
-                for article in data['articles']:
-                    md_lines.extend([
-                        f"### {article.get('title', 'Untitled')}\n",
-                        f"Source: {article.get('url', 'No URL')}\n",
-                        "Key Points:",
-                        f"{self._extract_key_points(article.get('content', ''))}\n"
-                    ])
-                
-                return "\n".join(md_lines)
+            )
+
+            logger.info(f"Successfully processed session {session_id}")
+            logger.info(f"Processed {len(processed_articles)} articles, {len(failed_articles)} failed")
             
-            else:
-                raise ValueError(f"Unsupported format: {format}")
-                
+            return session_id
+
         except Exception as e:
-            logger.error(f"Error exporting data: {str(e)}")
-            raise ProcessingError(f"Failed to export data: {str(e)}")
+            logger.error(f"Error processing session {session_id}: {e}")
+            self.db.update_session(
+                session_id=session_id,
+                update_data={
+                    'status': 'failed',
+                    'error': str(e)
+                }
+            )
+            raise ProcessingError(f"Failed to process session: {str(e)}")
 
-def test_processor():
-    """Test the data processor"""
-    processor = ResearchDataProcessor()
-    
-    try:
-        # Get session ID from user
-        session_id = input("Enter session ID to process: ")
-        
-        # Prepare context
-        context = processor.prepare_llm_context(session_id)
-        print("\nPrepared LLM Context:")
-        print("-" * 60)
-        print(context)
-        
-        # Export in different formats
-        print("\nJSON Export:")
-        print(processor.export_for_blog(session_id, 'json'))
-        
-        print("\nMarkdown Export:")
-        print(processor.export_for_blog(session_id, 'markdown'))
-        
-        return True
-        
-    except Exception as e:
-        print(f"Test failed: {str(e)}")
-        return False
+    def generate_blog_summary(self, session_id: str) -> Dict:
+        """Generate blog post from processed research data"""
+        try:
+            session_data = self.db.get_session(session_id)
+            if not session_data or not session_data.get('processed_data'):
+                raise ProcessingError("No processed data found for session")
 
-if __name__ == "__main__":
-    test_processor()
+            research_data = session_data['processed_data']
+            
+            completion = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """Generate an engaging blog post based on the research data.
+                        Include key insights, trends, and practical applications."""
+                    },
+                    {
+                        "role": "user",
+                        "content": str(research_data)
+                    }
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.7
+            )
+            
+            blog_content = BlogPost.model_validate_json(completion.choices[0].message.content)
+            return blog_content.model_dump()
+
+        except Exception as e:
+            logger.error(f"Error generating blog summary: {e}")
+            raise ProcessingError(f"Failed to generate blog summary: {str(e)}")
+
+    def _extract_key_findings(self, articles: List[Dict]) -> List[str]:
+        """Extract overall key findings from processed articles"""
+        all_points = []
+        for article in articles:
+            all_points.extend(article['summary']['main_points'])
+        
+        # Remove duplicates while preserving order
+        unique_points = list(dict.fromkeys(all_points))
+        return unique_points[:10]  # Return top 10 findings

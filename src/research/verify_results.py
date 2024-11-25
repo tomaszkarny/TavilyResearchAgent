@@ -3,8 +3,9 @@
 Verify and display research results with hybrid search support
 """
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 from .database.db import ResearchDatabase
+from .exceptions import DatabaseError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -84,6 +85,99 @@ def display_results(session_id: str) -> None:
                 print(f"Retrieved: {details['Retrieved At']}")
                 print(f"Language: {details['Language']}")
                 print("-" * 60 + "\n")
+
+def display_processed_data(session_id: str) -> Optional[Dict]:
+    """
+    Display processed data for a research session
+    
+    Args:
+        session_id: Database session ID
+    Returns:
+        Optional[Dict]: Processed data if found
+    """
+    try:
+        db = ResearchDatabase()
+        session = db.get_session(session_id)
+        
+        if not session or not session.get('processed_data'):
+            logger.error(f"No processed data found for session {session_id}")
+            return None
+            
+        data = session['processed_data']
+        
+        # Display Research Summary with Session Info
+        print("\n" + "="*50)
+        print("RESEARCH SUMMARY")
+        print("="*50)
+        print(f"\nTopic: {data['topic']}")
+        print(f"Session Created: {session.get('timestamp', 'N/A')}")
+        print(f"Last Updated: {session.get('completed_at', 'N/A')}")
+        
+        # Display Stats
+        if 'stats' in session:
+            print("\nSearch Statistics:")
+            print(f"Total Results Found: {session['stats'].get('total_found', 0)}")
+            print(f"Scientific Sources: {session['stats'].get('scientific_sources', 0)}")
+            print(f"Other Sources: {session['stats'].get('other_sources', 0)}")
+        
+        # Display Key Findings
+        print("\n" + "-"*20)
+        print("KEY FINDINGS")
+        print("-"*20)
+        for i, finding in enumerate(data['key_findings'], 1):
+            print(f"\n{i}. {finding}")
+            
+        # Display Processed Articles
+        print("\n" + "="*50)
+        print("PROCESSED ARTICLES")
+        print("="*50)
+        
+        # Sort articles by date if available
+        articles = data['articles']
+        articles.sort(
+            key=lambda x: x.get('metadata', {}).get('added_date', ''),
+            reverse=True
+        )
+        
+        for article in articles:
+            print("\n" + "-"*40)
+            print(f"Title: {article['title']}")
+            print(f"URL: {article['url']}")
+            print(f"Relevance Score: {article['score']:.2f}")
+            
+            # Enhanced metadata display
+            print("\nMetadata:")
+            metadata = article.get('metadata', {})
+            print(f"📅 Published: {metadata.get('published_date', 'N/A')}")
+            print(f"📅 Added to Database: {metadata.get('added_date', 'N/A')}")
+            print(f"🌐 Source: {metadata.get('source', 'web')}")
+            print(f"🗣 Language: {metadata.get('language', 'en')}")
+            
+            print("\nMain Points:")
+            for point in article['summary']['main_points']:
+                print(f"• {point}")
+                
+            print("\nKey Statistics:")
+            for stat in article['summary'].get('key_statistics', []):
+                print(f"📊 {stat}")
+                
+            print("\nPractical Tips:")
+            for tip in article['summary'].get('practical_tips', []):
+                print(f"💡 {tip}")
+                
+            print("\nExpert Opinions:")
+            for opinion in article['summary'].get('expert_opinions', []):
+                if opinion.get('expert') and opinion.get('quote'):
+                    print(f"👤 {opinion['expert']}: \"{opinion['quote']}\"")
+            
+            print("\nDetailed Summary:")
+            print(article['summary']['summary'])
+            
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error displaying processed data: {e}")
+        raise DatabaseError(f"Failed to display data: {str(e)}")
 
 def main():
     """Command line interface for result verification"""

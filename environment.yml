@@ -1,3 +1,4 @@
+# environment.yml
 name: research-assistant
 channels:
   - conda-forge
@@ -7,6 +8,7 @@ dependencies:
   - pymongo=4.10.1
   - python-dotenv=1.0.0
   - pytest=7.4.3
+  - pytest-asyncio
   - black=23.12.1
   - ipykernel
   - pip
@@ -14,3 +16,5 @@ dependencies:
       - tavily-python==0.3.7
       - pymongo
       - cohere
+      - pydantic>=2.0.0
+      - openai>=1.12.0

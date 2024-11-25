@@ -9,6 +9,7 @@ from pymongo import MongoClient, ASCENDING, TEXT
 import os
 from dotenv import load_dotenv
 from bson.objectid import ObjectId
+from ..exceptions import DatabaseError
 
 load_dotenv()
 
@@ -89,13 +90,54 @@ class ResearchDatabase:
             logger.error(f"Error saving research session: {e}")
             raise
     
-    def get_session(self, session_id: str) -> Optional[Dict]:
-        """Get session by ID"""
+    def update_session(self, session_id: str, update_data: Dict) -> None:
+        """
+        Update research session with new data
+        
+        Args:
+            session_id: Database session ID
+            update_data: Dictionary with fields to update
+        """
         try:
-            return self.sessions.find_one({"_id": ObjectId(session_id)})
+            # Convert ObjectId if string provided
+            if isinstance(session_id, str):
+                session_id = ObjectId(session_id)
+                
+            # Update session document
+            result = self.sessions.update_one(
+                {'_id': session_id},
+                {'$set': update_data}
+            )
+            
+            if result.modified_count == 0:
+                logger.warning(f"Session {session_id} not found or no changes made")
+            else:
+                logger.info(f"Updated session {session_id} with new data")
+                
         except Exception as e:
-            logger.error(f"Error getting session: {e}")
-            return None
+            logger.error(f"Error updating session {session_id}: {e}")
+            raise DatabaseError(f"Failed to update session: {str(e)}")
+    
+    def get_session(self, session_id: str) -> Optional[Dict]:
+        """
+        Get session by ID
+        
+        Args:
+            session_id: Database session ID
+            
+        Returns:
+            Session document or None if not found
+        """
+        try:
+            if isinstance(session_id, str):
+                session_id = ObjectId(session_id)
+                
+            session = self.sessions.find_one({'_id': session_id})
+            return session
+            
+        except Exception as e:
+            logger.error(f"Error getting session {session_id}: {e}")
+            raise DatabaseError(f"Failed to get session: {str(e)}")
     
     def get_articles(self, session_id: str) -> List[Dict]:
         """Get articles for a session"""
