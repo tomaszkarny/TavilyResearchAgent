@@ -166,16 +166,47 @@ class ResearchManager:
                         query_modifiers: Optional[List[str]] = None,
                         **kwargs) -> str:
         """
-        Perform research with enhanced query building
+        Perform research with enhanced query building and session management.
+
+        Args:
+            query: Search query string
+            max_results: Maximum number of results to return
+            min_score: Minimum relevance score for results
+            include_domains: List of domains to include in search
+            exclude_domains: List of domains to exclude from search
+            date_filter: Dictionary with date range filters
+            search_depth: Depth of search ("basic" or "advanced")
+            query_modifiers: List of additional terms to modify query
+            **kwargs: Additional search parameters
+
+        Returns:
+            str: Session ID for the research process
+
+        Raises:
+            SearchError: If search operation fails
+            ConfigurationError: If required configuration is missing
         """
         try:
             logger.info(f"\nInitiating research for: {query}")
+            start_time = datetime.utcnow()
             
-            # Create initial session
-            session = {
+            # Create research session
+            session = ResearchSession(
+                query=query,
+                max_results=max_results,
+                min_score=min_score,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                search_depth=search_depth,
+                topic="general",
+                include_raw_content=True
+            )
+            
+            # Initialize session in database
+            session_data = {
                 'query': query,
-                'timestamp': datetime.utcnow(),
-                'status': 'gathering',
+                'timestamp': start_time,
+                'status': 'initialized',
                 'config': {
                     'max_results': max_results,
                     'min_score': min_score,
@@ -186,163 +217,198 @@ class ResearchManager:
                     'query_modifiers': query_modifiers
                 }
             }
-            session_id = str(self.db.sessions.insert_one(session).inserted_id)
+            session_id = str(self.db.sessions.insert_one(session_data).inserted_id)
             logger.info(f"Created research session: {session_id}")
             
-            all_results = []
-            if include_domains:
-                # 1. Najpierw próbujemy znaleźć wyniki z domen naukowych
-                scientific_domains = include_domains[:8]  # Pierwsze 8 domen (naukowe)
-                other_domains = include_domains[8:]       # Pozostałe domeny
+            try:
+                # Update session status
+                self.db.update_session(session_id, {'status': 'searching'})
                 
-                # Próbujemy różne warianty zapytań dla domen naukowych
-                scientific_queries = [
-                    f"{query} (research OR study)",  # Podstawowe
-                    f"{query} methodology",          # Metodologia
-                    f"{query} review",              # Przeglądy
-                    query                           # Czyste zapytanie
-                ]
-                
-                for sq in scientific_queries:
-                    if len(all_results) < max_results // 2:  # Jeśli wciąż potrzebujemy wyników
+                all_results = []
+                if include_domains:
+                    # Scientific domains search
+                    scientific_domains = include_domains[:8]
+                    other_domains = include_domains[8:]
+                    
+                    scientific_queries = [
+                        f"{query} (research OR study)",
+                        f"{query} methodology",
+                        f"{query} review",
+                        query
+                    ]
+                    
+                    for sq in scientific_queries:
+                        if len(all_results) < max_results // 2:
+                            try:
+                                domain_clause = " OR ".join([f"site:{domain}" for domain in scientific_domains])
+                                results = self.client.hybrid_search(
+                                    query=f"{sq} ({domain_clause})",
+                                    max_results=max_results // 4,
+                                    min_score=min_score * 0.7,
+                                    config=session.to_search_config(),
+                                    session_id=session_id
+                                )
+                                if results:
+                                    all_results.extend(results)
+                                    # Update session progress
+                                    self.db.update_session(
+                                        session_id,
+                                        {
+                                            'progress': {
+                                                'current_phase': 'scientific_search',
+                                                'results_found': len(all_results)
+                                            }
+                                        }
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Error in scientific search: {e}")
+                                continue
+                    
+                    # Other domains search
+                    if other_domains and len(all_results) < max_results:
                         try:
-                            domain_clause = " OR ".join([f"site:{domain}" for domain in scientific_domains])
+                            domain_clause = " OR ".join([f"site:{domain}" for domain in other_domains])
                             results = self.client.hybrid_search(
-                                query=f"{sq} ({domain_clause})",
-                                max_results=max_results // 4,  # Mniejszy limit na każde zapytanie
-                                min_score=min_score * 0.7,    # Niższy próg
-                                config=SearchConfig(search_depth="advanced")
+                                query=f"{query} ({domain_clause})",
+                                max_results=max_results - len(all_results),
+                                min_score=min_score,
+                                config=session.to_search_config(),
+                                session_id=session_id
                             )
                             if results:
                                 all_results.extend(results)
-                                time.sleep(6)  # Przerwa między zapytaniami
+                                # Update session progress
+                                self.db.update_session(
+                                    session_id,
+                                    {
+                                        'progress': {
+                                            'current_phase': 'other_domains_search',
+                                            'results_found': len(all_results)
+                                        }
+                                    }
+                                )
                         except Exception as e:
-                            logger.warning(f"Error in scientific search: {e}")
-                            continue
+                            logger.warning(f"Error in other domains search: {e}")
+                else:
+                    # Single search without domain filters
+                    all_results = self.client.hybrid_search(
+                        query=query,
+                        max_results=max_results * 2,
+                        min_score=min_score,
+                        config=session.to_search_config(),
+                        session_id=session_id
+                    )
                 
-                # 2. Następnie szukamy w pozostałych domenach
-                if other_domains and len(all_results) < max_results:
-                    try:
-                        domain_clause = " OR ".join([f"site:{domain}" for domain in other_domains])
-                        results = self.client.hybrid_search(
-                            query=f"{query} ({domain_clause})",
-                            max_results=max_results - len(all_results),
-                            min_score=min_score,
-                            config=SearchConfig(search_depth="advanced")
-                        )
-                        if results:
-                            all_results.extend(results)
-                    except Exception as e:
-                        logger.warning(f"Error in other domains search: {e}")
-            else:
-                # Pojedyncze wyszukiwanie bez filtrów domenowych
-                all_results = self.client.hybrid_search(
-                    query=query,
-                    max_results=max_results * 2,
-                    min_score=min_score,
-                    config=SearchConfig(search_depth="advanced")
+                # Update session status for processing
+                self.db.update_session(session_id, {'status': 'processing'})
+                
+                # Process and deduplicate results
+                seen_urls = {}
+                for result in all_results:
+                    url = result.get('url', '').lower()
+                    current_score = result.get('score', 0)
+                    if url not in seen_urls or current_score > seen_urls[url]['score']:
+                        seen_urls[url] = result
+                
+                all_results = list(seen_urls.values())
+                
+                # Prioritize and sort results
+                prioritized_results = []
+                other_results = []
+                
+                for result in all_results:
+                    url = result.get('url', '').lower()
+                    is_preferred = any(domain.lower() in url for domain in (include_domains or []))
+                    if is_preferred:
+                        prioritized_results.append(result)
+                    elif not any(domain.lower() in url for domain in (exclude_domains or [])):
+                        other_results.append(result)
+                
+                prioritized_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+                other_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+                
+                # Combine results
+                final_results = []
+                scientific_limit = max_results // 2
+                final_results.extend(prioritized_results[:scientific_limit])
+                remaining_slots = max_results - len(final_results)
+                final_results.extend(other_results[:remaining_slots])
+                
+                # Additional search if needed
+                if len(final_results) < max_results:
+                    additional_results = self.client.hybrid_search(
+                        query=query,
+                        max_results=max_results - len(final_results),
+                        min_score=min_score * 0.7,
+                        config=session.to_search_config(),
+                        session_id=session_id
+                    )
+                    final_results.extend(additional_results)
+                
+                # Save results to database
+                for article in final_results:
+                    metadata = article.get('metadata', {})
+                    published_date = metadata.get('published_date') or metadata.get('date') or 'N/A'
+                    
+                    article_doc = {
+                        'session_id': session_id,
+                        'title': article.get('title', 'N/A'),
+                        'url': article.get('url', 'N/A'),
+                        'content': article.get('content', ''),
+                        'score': article.get('score', 0),
+                        'source': article.get('source', 'web'),
+                        'metadata': {
+                            **metadata,
+                            'published_date': published_date,
+                            'added_date': datetime.utcnow().isoformat()
+                        },
+                        'embedding_data': article.get('embedding', [])
+                    }
+                    self.db.articles.insert_one(article_doc)
+                
+                # Update final session stats
+                end_time = datetime.utcnow()
+                self.db.update_session(
+                    session_id=session_id,
+                    update_data={
+                        'status': 'completed',
+                        'stats': {
+                            'total_found': len(all_results),
+                            'scientific_sources': len(prioritized_results),
+                            'other_sources': len(other_results),
+                            'final_saved': len(final_results),
+                            'processing_time': (end_time - start_time).total_seconds()
+                        },
+                        'completed_at': end_time
+                    }
                 )
-            
-            # Lepsze usuwanie duplikatów z zachowaniem najlepszych wyników
-            seen_urls = {}  # url -> najlepszy wynik
-            for result in all_results:
-                url = result.get('url', '').lower()
-                current_score = result.get('score', 0)
                 
-                # Zachowaj wynik z lepszym score lub nowy URL
-                if url not in seen_urls or current_score > seen_urls[url]['score']:
-                    seen_urls[url] = result
-            
-            # Konwertuj z powrotem do listy
-            all_results = list(seen_urls.values())
-            
-            # Sort and filter results
-            prioritized_results = []
-            other_results = []
-            
-            for result in all_results:
-                url = result.get('url', '').lower()
-                is_preferred = any(domain.lower() in url for domain in (include_domains or []))
+                # Log final statistics
+                logger.info(f"\nSearch Result Statistics:")
+                logger.info(f"Total Results Found: {len(all_results)}")
+                logger.info(f"Scientific Sources: {len(prioritized_results)}")
+                logger.info(f"Other Sources: {len(other_results)}")
+                logger.info(f"Final Results Saved: {len(final_results)}")
+                logger.info(f"Processing Time: {(end_time - start_time).total_seconds():.2f} seconds")
                 
-                if is_preferred:
-                    prioritized_results.append(result)
-                elif not any(domain.lower() in url for domain in (exclude_domains or [])):
-                    other_results.append(result)
-            
-            # Sort by score within each category
-            prioritized_results.sort(key=lambda x: x.get('score', 0), reverse=True)
-            other_results.sort(key=lambda x: x.get('score', 0), reverse=True)
-            
-            # Combine results maintaining balance
-            final_results = []
-            scientific_limit = max_results // 2
-            
-            # Add scientific results up to the limit
-            final_results.extend(prioritized_results[:scientific_limit])
-            
-            # Fill remaining slots with other results
-            remaining_slots = max_results - len(final_results)
-            final_results.extend(other_results[:remaining_slots])
-            
-            # If we still don't have enough results, try one more search with lower threshold
-            if len(final_results) < max_results:
-                additional_results = self.client.hybrid_search(
-                    query=query,
-                    max_results=max_results - len(final_results),
-                    min_score=min_score * 0.7,
-                    config=SearchConfig(search_depth="advanced")
+                return session_id
+                
+            except Exception as e:
+                # Update session status on error
+                self.db.update_session(
+                    session_id,
+                    {
+                        'status': 'error',
+                        'error': str(e),
+                        'error_timestamp': datetime.utcnow()
+                    }
                 )
-                final_results.extend(additional_results)
-            
-            # Save articles to database
-            for article in final_results:
-                # Extract date from Tavily response
-                metadata = article.get('metadata', {})
-                published_date = metadata.get('published_date') or metadata.get('date') or 'N/A'
+                raise
                 
-                article_doc = {
-                    'session_id': session_id,
-                    'title': article.get('title', 'N/A'),
-                    'url': article.get('url', 'N/A'),
-                    'content': article.get('content', ''),
-                    'score': article.get('score', 0),
-                    'source': article.get('source', 'web'),
-                    'metadata': {
-                        **metadata,  # Keep original metadata
-                        'published_date': published_date,
-                        'added_date': datetime.utcnow().isoformat()
-                    },
-                    'embedding_data': article.get('embedding', [])
-                }
-                self.db.articles.insert_one(article_doc)
-            
-            # Update session with stats
-            self.db.update_session(
-                session_id=session_id,
-                update_data={
-                    'status': 'completed',
-                    'stats': {
-                        'total_found': len(all_results),
-                        'scientific_sources': len(prioritized_results),
-                        'other_sources': len(other_results),
-                        'final_saved': len(final_results)
-                    },
-                    'completed_at': datetime.utcnow()
-                }
-            )
-            
-            # Log detailed statistics
-            logger.info(f"\nSearch Result Statistics:")
-            logger.info(f"Total Results Found: {len(all_results)}")
-            logger.info(f"Scientific Sources: {len(prioritized_results)}")
-            logger.info(f"Other Sources: {len(other_results)}")
-            logger.info(f"Final Results Saved: {len(final_results)}")
-            
-            return session_id
-            
         except Exception as e:
-            logger.error(f"Error during research: {str(e)}")
-            raise SearchError(f"Research operation failed: {str(e)}")
+            error_msg = f"Research operation failed: {str(e)}"
+            logger.error(error_msg)
+            raise SearchError(error_msg)
     
     def _enrich_results(self,
                        result: ResearchResult,

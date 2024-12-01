@@ -142,10 +142,11 @@ class HybridResearchClient:
                      exclude_domains: Optional[List[str]] = None,
                      min_score: float = 0.6,
                      save_results: bool = True,
-                     config: Optional[SearchConfig] = None) -> List[Dict]:
+                     config: Optional[SearchConfig] = None,
+                     session_id: Optional[str] = None) -> List[Dict]:
         """
-        Perform search using Tavily API and local database
-        
+        Perform hybrid search with proper session management.
+
         Args:
             query: Search query
             max_results: Maximum total results
@@ -155,12 +156,43 @@ class HybridResearchClient:
             min_score: Minimum relevance score
             save_results: Whether to save web results
             config: Additional search configuration
+            session_id: Optional ID of existing session to update
+
+        Returns:
+            List of ranked search results
+
+        Raises:
+            SearchError: If search operation fails
+            ConfigurationError: If required configuration is missing
         """
+        start_time = datetime.utcnow()
         try:
-            logger.info(f"Starting search for: {query}")
+            logger.info(f"Starting search for: {query}" + 
+                       (f" with session ID: {session_id}" if session_id else ""))
             
             # Use default config if none provided
             config = config or SearchConfig()
+            
+            # Update session status if exists
+            if session_id:
+                try:
+                    self.db.update_session(
+                        session_id=session_id,
+                        update_data={
+                            'status': 'searching',
+                            'last_updated': datetime.utcnow(),
+                            'search_config': {
+                                'query': query,
+                                'max_results': max_results,
+                                'min_score': min_score,
+                                'include_domains': include_domains,
+                                'exclude_domains': exclude_domains,
+                                'search_depth': config.search_depth
+                            }
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update initial session status: {str(e)}")
             
             # Get web results
             response = self.tavily_client.search(
@@ -179,24 +211,71 @@ class HybridResearchClient:
             all_results = self._process_search_response(response)
             
             # Rank results using Cohere
+            ranked_results = []
             if all_results:
                 ranked_results = self._rank_results(query, all_results, max_results)
                 results = [r for r in ranked_results if r.get('score', 0) >= min_score]
             else:
                 results = []
             
-            # Save results if requested
+            # Save or update results if requested
             if save_results and results:
-                logger.info("Saving results to database")
-                session_id = self.db.save_research_session(results, query)
-                logger.info(f"Results saved with session ID: {session_id}")
+                try:
+                    if session_id:
+                        logger.info(f"Updating existing session: {session_id}")
+                        update_response = self.db.update_session(
+                            session_id=session_id,
+                            update_data={
+                                'status': 'completed',
+                                'results': results,
+                                'result_count': len(results),
+                                'last_updated': datetime.utcnow(),
+                                'search_metadata': {
+                                    'total_found': len(all_results),
+                                    'ranked_count': len(ranked_results),
+                                    'final_count': len(results),
+                                    'processing_time': (datetime.utcnow() - start_time).total_seconds()
+                                }
+                            }
+                        )
+                        if update_response.get('success'):
+                            logger.info(f"Successfully updated session: {session_id}")
+                        else:
+                            logger.warning(f"Session update completed with status: {update_response.get('message')}")
+                    else:
+                        logger.info("Creating new research session")
+                        session_id = self.db.save_research_session(results, query)
+                        logger.info(f"Created new session with ID: {session_id}")
+                except Exception as e:
+                    logger.error(f"Failed to {'update' if session_id else 'save'} session: {str(e)}")
+                    # Continue execution even if session management fails
             
             logger.info(f"Found {len(results)} relevant results")
             return results[:max_results]
             
         except Exception as e:
-            logger.error(f"Search failed: {str(e)}")
-            raise SearchError(f"Search operation failed: {str(e)}")
+            error_msg = f"Search operation failed: {str(e)}"
+            logger.error(error_msg)
+            
+            # Update session with error status if it exists
+            if session_id:
+                try:
+                    self.db.update_session(
+                        session_id=session_id,
+                        update_data={
+                            'status': 'failed',
+                            'error': error_msg,
+                            'last_updated': datetime.utcnow(),
+                            'search_metadata': {
+                                'error_timestamp': datetime.utcnow(),
+                                'processing_time': (datetime.utcnow() - start_time).total_seconds()
+                            }
+                        }
+                    )
+                except Exception as db_error:
+                    logger.error(f"Failed to update error status: {db_error}")
+            
+            raise SearchError(error_msg)
     
     def search(self,
               query: str,

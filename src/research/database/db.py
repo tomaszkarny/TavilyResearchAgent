@@ -90,33 +90,108 @@ class ResearchDatabase:
             logger.error(f"Error saving research session: {e}")
             raise
     
-    def update_session(self, session_id: str, update_data: Dict) -> None:
+    def update_session(self, session_id: str, update_data: Dict) -> Dict:
         """
-        Update research session with new data
-        
+        Update research session with new data and metadata tracking.
+
         Args:
             session_id: Database session ID
             update_data: Dictionary with fields to update
+
+        Returns:
+            Dict containing update status and metadata:
+                - success: Boolean indicating if update was successful
+                - message: Description of the operation result
+                - modified_count: Number of documents modified
+                - timestamp: When the update occurred
+                - previous_state: Previous session state (if available)
+
+        Raises:
+            DatabaseError: If session validation or update fails
+            ValueError: If session_id or update_data is invalid
         """
         try:
+            # Input validation
+            if not session_id:
+                raise ValueError("session_id cannot be empty")
+            if not update_data or not isinstance(update_data, dict):
+                raise ValueError("update_data must be a non-empty dictionary")
+
             # Convert ObjectId if string provided
             if isinstance(session_id, str):
-                session_id = ObjectId(session_id)
-                
-            # Update session document
+                try:
+                    session_id = ObjectId(session_id)
+                except Exception as e:
+                    raise ValueError(f"Invalid session_id format: {str(e)}")
+
+            # Get current session state
+            current_session = self.sessions.find_one({'_id': session_id})
+            if not current_session:
+                raise DatabaseError(f"Session {session_id} not found")
+
+            # Prepare update metadata
+            update_metadata = {
+                'last_modified': datetime.utcnow(),
+                'modification_history': {
+                    'timestamp': datetime.utcnow(),
+                    'modified_fields': list(update_data.keys()),
+                    'previous_state': {
+                        k: current_session.get(k) 
+                        for k in update_data.keys() 
+                        if k in current_session
+                    }
+                }
+            }
+
+            # Combine update data with metadata
+            full_update = {
+                '$set': update_data,
+                '$push': {
+                    'updates': update_metadata['modification_history']
+                }
+            }
+
+            # Perform update with validation
             result = self.sessions.update_one(
                 {'_id': session_id},
-                {'$set': update_data}
+                full_update
             )
-            
-            if result.modified_count == 0:
-                logger.warning(f"Session {session_id} not found or no changes made")
+
+            # Prepare response
+            response = {
+                'success': result.modified_count > 0,
+                'message': 'Session updated successfully' if result.modified_count > 0 else 'No changes made',
+                'modified_count': result.modified_count,
+                'timestamp': update_metadata['last_modified'],
+                'previous_state': update_metadata['modification_history']['previous_state']
+            }
+
+            # Log operation result
+            if result.modified_count > 0:
+                logger.info(
+                    f"Updated session {session_id} with new data. "
+                    f"Modified fields: {', '.join(update_data.keys())}"
+                )
             else:
-                logger.info(f"Updated session {session_id} with new data")
-                
+                logger.warning(
+                    f"Session {session_id} update resulted in no changes. "
+                    f"Attempted fields: {', '.join(update_data.keys())}"
+                )
+
+            return response
+
+        except ValueError as e:
+            error_msg = f"Invalid input: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        except DatabaseError as e:
+            error_msg = f"Database operation failed: {str(e)}"
+            logger.error(error_msg)
+            raise DatabaseError(error_msg)
         except Exception as e:
-            logger.error(f"Error updating session {session_id}: {e}")
-            raise DatabaseError(f"Failed to update session: {str(e)}")
+            error_msg = f"Unexpected error updating session {session_id}: {str(e)}"
+            logger.error(error_msg)
+            raise DatabaseError(error_msg)
     
     def get_session(self, session_id: str) -> Optional[Dict]:
         """
