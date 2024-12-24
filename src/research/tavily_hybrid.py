@@ -24,11 +24,12 @@ class SearchConfig:
     def __init__(
         self,
         search_depth: str = "advanced",
-        topic: str = "general",
+        topic: str = "news",
         include_answer: bool = False,
         include_raw_content: bool = True,
         include_images: bool = False,
-        max_results: int = 5
+        max_results: int = 5,
+        days: int = 7
     ):
         self.search_depth = search_depth
         self.topic = topic
@@ -36,6 +37,7 @@ class SearchConfig:
         self.include_raw_content = include_raw_content
         self.include_images = include_images
         self.max_results = max_results
+        self.days = days
 
 class HybridResearchClient:
     """Enhanced research client with Cohere ranking"""
@@ -99,8 +101,18 @@ class HybridResearchClient:
         """Process Tavily search response"""
         processed_results = []
         
+        # Log raw response structure
+        logger.info("Raw Tavily response structure:")
+        logger.info(f"Keys in response: {list(response.keys())}")
+
         # Extract main search results
-        for result in response.get('results', []):
+        for i, result in enumerate(response.get('results', [])):
+            # Log complete result data for debugging
+            logger.info(f"\nResult {i+1} complete data:")
+            logger.info(f"Available fields: {list(result.keys())}")
+            logger.info(f"Published date: {result.get('published_date')}")
+            logger.info(f"Title: {result.get('title')}")
+            
             processed = {
                 'title': result.get('title', 'N/A'),
                 'url': result.get('url', 'N/A'),
@@ -115,7 +127,12 @@ class HybridResearchClient:
                 }
             }
             processed_results.append(processed)
-        
+
+        # Log sample of processed results
+        if processed_results:
+            logger.info("\nSample processed result metadata:")
+            logger.info(f"First result metadata: {processed_results[0]['metadata']}")
+
         # Extract any included images if available
         if images := response.get('images'):
             for img_url in images:
@@ -131,6 +148,8 @@ class HybridResearchClient:
                         'retrieved_at': datetime.utcnow()
                     }
                 })
+        
+        logger.info(f"\nProcessed {len(processed_results)} results")
         
         return processed_results
     
@@ -193,6 +212,12 @@ class HybridResearchClient:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to update initial session status: {str(e)}")
+
+            logger.info("Sending search request to Tavily with parameters:")
+            logger.info(f"Query: {query}")
+            logger.info(f"Search depth: {config.search_depth}")
+            logger.info(f"Topic: {config.topic}")
+            logger.info(f"Days: {config.days}")
             
             # Get web results
             response = self.tavily_client.search(
@@ -200,12 +225,20 @@ class HybridResearchClient:
                 max_results=max_web or max_results,
                 search_depth=config.search_depth,
                 topic=config.topic,
+                days=config.days,
                 include_answer=config.include_answer,
                 include_raw_content=config.include_raw_content,
                 include_images=config.include_images,
                 include_domains=include_domains,
                 exclude_domains=exclude_domains
             )
+         
+            logger.info("Raw Tavily API Response Keys:")
+            for key in response.keys():
+                logger.info(f"- {key}")
+            if response.get('results'):
+                logger.info("Sample Result Keys:")
+                logger.info(list(response['results'][0].keys()))
             
             # Process results
             all_results = self._process_search_response(response)
@@ -291,6 +324,7 @@ class HybridResearchClient:
                 max_results=max_results,
                 search_depth=config.search_depth,
                 topic=config.topic,
+                days=config.days,
                 include_answer=config.include_answer,
                 include_raw_content=config.include_raw_content,
                 include_images=config.include_images

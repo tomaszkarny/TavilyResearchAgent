@@ -62,3 +62,6 @@ Thumbs.db
 *.log
 logs/
 log/
+
+# windsurf rules
+.windsurfrules

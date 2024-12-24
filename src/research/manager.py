@@ -62,30 +62,46 @@ class QueryBuilder:
         return terms
     
     @staticmethod
-    def enhance_query(query: str, domain_type: str = None, modifiers: List[str] = None) -> str:
-        """
-        Enhance query based on domain type and modifiers
-        """
-        enhanced_query = query
-        used_terms = set()
+    def enhance_query(
+        query: str, 
+        domain_type: Optional[str] = None, 
+        modifiers: Optional[List[str]] = None
+                ) -> str:
+                """
+    Enhance query based on domain type and modifiers.
+
+    Args:
+        query: Base search query string
+        domain_type: Type of domain to get specific terms from ('scientific', 'news', 'health')
+        modifiers: Additional query modifiers to append
+
+    Returns:
+        str: Enhanced query with added domain terms and modifiers
+
+    Example:
+        >>> QueryBuilder.enhance_query("AI research", domain_type="scientific")
+        'AI research (research OR study OR analysis OR systematic review OR evidence-based)'
+    """
+                enhanced_query = query
+                used_terms = set()
+    
+                if domain_type:
+        # Get domain-specific terms
+                    domain_terms = QueryBuilder.get_domain_specific_terms(query, domain_type)
         
-        if domain_type:
-            # Get domain-specific terms
-            domain_terms = QueryBuilder.get_domain_specific_terms(query, domain_type)
-            
-            # Add domain terms as optional matches
-            if domain_terms:
-                term_clause = " OR ".join(domain_terms)
-                enhanced_query += f" ({term_clause})"
-        
-        # Add any additional modifiers
-        if modifiers:
-            for modifier in modifiers:
-                if modifier not in used_terms:
-                    enhanced_query += f" {modifier}"
-                    used_terms.add(modifier)
-        
-        return enhanced_query
+         # Add domain terms as optional matches
+                    if domain_terms:
+                     term_clause = " OR ".join(domain_terms)
+                     enhanced_query += f" ({term_clause})"
+    
+         # Add any additional modifiers
+                if modifiers:
+                 for modifier in modifiers:
+                    if modifier not in used_terms:
+                     enhanced_query += f" {modifier}"
+                     used_terms.add(modifier)
+    
+                return enhanced_query
 
 class ResearchSession:
     """Container for research session configuration"""
@@ -97,6 +113,7 @@ class ResearchSession:
                  exclude_domains: Optional[List[str]] = None,
                  search_depth: str = "advanced",
                  topic: str = "general",
+                 days: int = 7,
                  language: Optional[str] = None,
                  include_answer: bool = False,
                  include_images: bool = False,
@@ -113,12 +130,14 @@ class ResearchSession:
         self.include_images = include_images
         self.include_raw_content = include_raw_content
         self.timestamp = datetime.utcnow()
+        self.days = days 
         
     def to_search_config(self) -> SearchConfig:
         """Convert session to SearchConfig"""
         return SearchConfig(
             search_depth=self.search_depth,
             topic=self.topic,
+            days=self.days,
             include_answer=self.include_answer,
             include_raw_content=self.include_raw_content,
             include_images=self.include_images,
@@ -198,7 +217,8 @@ class ResearchManager:
                 include_domains=include_domains,
                 exclude_domains=exclude_domains,
                 search_depth=search_depth,
-                topic="general",
+                topic=kwargs.get('topic', 'news'),
+                days=kwargs.get('days', 7),
                 include_raw_content=True
             )
             
@@ -302,27 +322,25 @@ class ResearchManager:
                 # Update session status for processing
                 self.db.update_session(session_id, {'status': 'processing'})
                 
-                # Process and deduplicate results
+                # Process and deduplicate results 
                 seen_urls = {}
                 for result in all_results:
                     url = result.get('url', '').lower()
                     current_score = result.get('score', 0)
-                    if url not in seen_urls or current_score > seen_urls[url]['score']:
+                    if url not in seen_urls or current_score > seen_urls[url].get('score', 0):  # Bezpieczny dostęp
                         seen_urls[url] = result
                 
                 all_results = list(seen_urls.values())
-                
-                # Prioritize and sort results
+                   
                 prioritized_results = []
                 other_results = []
-                
                 for result in all_results:
                     url = result.get('url', '').lower()
                     is_preferred = any(domain.lower() in url for domain in (include_domains or []))
                     if is_preferred:
-                        prioritized_results.append(result)
+                     prioritized_results.append(result)
                     elif not any(domain.lower() in url for domain in (exclude_domains or [])):
-                        other_results.append(result)
+                     other_results.append(result)
                 
                 prioritized_results.sort(key=lambda x: x.get('score', 0), reverse=True)
                 other_results.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -349,6 +367,12 @@ class ResearchManager:
                 for article in final_results:
                     metadata = article.get('metadata', {})
                     published_date = metadata.get('published_date') or metadata.get('date') or 'N/A'
+
+                     # Add debug logging
+                    logger.info(f"Saving article to database:")
+                    logger.info(f"Title: {article.get('title')}")
+                    logger.info(f"Original metadata: {metadata}")
+                    logger.info(f"Published date: {published_date}")
                     
                     article_doc = {
                         'session_id': session_id,

@@ -6,7 +6,7 @@ from .manager import ResearchManager
 from .data_processor import MiniProcessor
 from .verify_results import ResearchVerifier, display_processed_data
 from .exceptions import ProcessingError
-from typing import List
+from typing import List, Optional, Dict, Tuple
 import logging
 
 # Configure logging
@@ -110,8 +110,17 @@ PREDEFINED_SOURCES = {
     }
 }
 
-def display_processing_stats(session_data: dict):
-    """Display processing statistics"""
+def display_processing_stats(session_data: Optional[Dict]) -> None:
+    """
+    Display processing statistics
+    
+    Args:
+        session_data: Optional dictionary containing session data
+    """
+    if not session_data:
+        print("\nNo processing statistics available")
+        return
+    
     print("\nProcessing Statistics:")
     print(f"Total Articles: {session_data.get('total_count', 0)}")
     print(f"Successfully Processed: {session_data.get('processed_count', 0)}")
@@ -123,8 +132,13 @@ def display_processing_stats(session_data: dict):
         for article in failed_articles:
             print(f"- {article['title']}: {article['error']}")
 
-def get_domains_filter() -> tuple[List[str], List[str]]:
-    """Get domain inclusion/exclusion lists from user"""
+def get_domains_filter() -> Tuple[List[str], List[str]]:
+    """
+    Get domain inclusion/exclusion lists from user
+    
+    Returns:
+        Tuple containing lists of included and excluded domains
+    """
     include_domains = []
     exclude_domains = []
     
@@ -280,7 +294,17 @@ def main():
         if input().strip().lower().startswith('y'):
             parameters = get_search_parameters()
         else:
-            parameters = {'max_results': 10, 'min_score': 0.6}
+            parameters = {
+        'max_results': 10, 
+        'min_score': 0.6,
+        'topic': 'news',
+        'days': 7  # Default to last 7 days
+            }
+            logger.info("Using default parameters with news configuration:")
+            logger.info(f"Topic: {parameters['topic']}")
+            logger.info(f"Days: {parameters['days']}")
+            logger.info(f"Max Results: {parameters['max_results']}")
+            logger.info(f"Min Score: {parameters['min_score']}")
         
         # 1. Perform research
         logger.info(f"\nInitiating research for: {query}")
@@ -316,9 +340,9 @@ def main():
                 print("\nArticles processed successfully!")
                 
                 # Get and display processing statistics
-                session_data = processor.db.get_session(processed_session)
-                if session_data.get('processed_data'):
-                    display_processing_stats(session_data)
+                if session_data := processor.db.get_session(processed_session):
+                    if session_data.get('processed_data'):
+                        display_processing_stats(session_data)
                     
                     # 4. Ask about blog generation
                     print("\nWould you like to generate a blog post from the processed data? (y/n)")

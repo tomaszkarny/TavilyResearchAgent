@@ -41,6 +41,8 @@ class ResearchDatabase:
         # Article indexes
         self.articles.create_index([("session_id", ASCENDING)])
         self.articles.create_index([("url", ASCENDING)])
+        self.articles.create_index([("metadata.published_date", ASCENDING)])
+        self.articles.create_index([("metadata.retrieved_at", ASCENDING)])
         
         # Text search index
         try:
@@ -52,10 +54,41 @@ class ResearchDatabase:
         except Exception as e:
             logger.error(f"Text index creation failed: {e}")
             raise
+
+    def _format_date(self, date_str: Optional[str]) -> str:
+        """Format date string to standard format"""
+        if not date_str:
+            return 'N/A'
+        try:
+            # Handle different date formats
+            for fmt in ['%Y-%m-%dT%H:%M:%S', '%a, %d %b %Y %H:%M:%S GMT']:
+                try:
+                    dt = datetime.strptime(date_str, fmt)
+                    return dt.strftime('%a, %d %b %Y %H:%M:%S GMT')
+                except ValueError:
+                    continue
+            return date_str
+        except Exception:
+            return date_str
     
     def save_research_session(self, results: List[Dict], query: str) -> str:
-        """Save research results"""
+        """
+        Save research session and results to database
+        
+        Args:
+            results: List of search results
+            query: Search query
+            
+        Returns:
+            str: Session ID
+        """
         try:
+            # Validate inputs
+            if not isinstance(query, str):
+                raise ValueError("Query must be a string")
+            if not isinstance(results, list):
+                raise ValueError("Results must be a list")
+
             # Create session record
             session = {
                 'query': query,
@@ -64,28 +97,41 @@ class ResearchDatabase:
                 'processed': False,
                 'article_count': len(results)
             }
-            
+
             session_id = str(self.sessions.insert_one(session).inserted_id)
             logger.info(f"Created research session: {session_id}")
-            
+
             # Save articles
             for result in results:
+                # Process metadata with standardized dates
+                metadata = result.get('metadata', {})
+                processed_metadata = {
+                    'source': metadata.get('source', 'web'),
+                    'published_date': self._format_date(result.get('published_date')),
+                    'retrieved_at': datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
+                    'added_date': datetime.utcnow().isoformat(),
+                    'score': result.get('score', 0),
+                    'author': metadata.get('author', 'N/A'),
+                    'language': metadata.get('language', 'N/A'),
+                    'response_time': result.get('response_time')
+                }
+
                 article = {
                     'session_id': session_id,
                     'title': result.get('title', 'N/A'),
                     'url': result.get('url', 'N/A'),
                     'content': result.get('content', ''),
+                    'raw_content': result.get('raw_content', '') if result.get('include_raw_content') else '',
                     'score': result.get('score', 0),
-                    'source': result.get('source', 'web'),
-                    'metadata': result.get('metadata', {}),
-                    # Store embeddings as regular field
+                    'source': 'tavily',
+                    'metadata': processed_metadata,
                     'embedding_data': result.get('embedding', [])
                 }
                 self.articles.insert_one(article)
-            
+
             logger.info(f"Saved {len(results)} articles for session {session_id}")
             return session_id
-            
+
         except Exception as e:
             logger.error(f"Error saving research session: {e}")
             raise
@@ -117,6 +163,10 @@ class ResearchDatabase:
             if not update_data or not isinstance(update_data, dict):
                 raise ValueError("update_data must be a non-empty dictionary")
 
+            # Validate timestamps if present
+            if 'timestamp' in update_data and not isinstance(update_data['timestamp'], datetime):
+                raise ValueError("timestamp must be a datetime object")
+
             # Convert ObjectId if string provided
             if isinstance(session_id, str):
                 try:
@@ -136,8 +186,8 @@ class ResearchDatabase:
                     'timestamp': datetime.utcnow(),
                     'modified_fields': list(update_data.keys()),
                     'previous_state': {
-                        k: current_session.get(k) 
-                        for k in update_data.keys() 
+                        k: current_session.get(k)
+                        for k in update_data.keys()
                         if k in current_session
                     }
                 }
@@ -217,7 +267,19 @@ class ResearchDatabase:
     def get_articles(self, session_id: str) -> List[Dict]:
         """Get articles for a session"""
         try:
-            return list(self.articles.find({"session_id": session_id}))
+            pipeline = [
+                {"$match": {"session_id": session_id}},
+                {"$sort": {"metadata.published_date": -1}},
+                {"$project": {
+                    "title": 1,
+                    "url": 1,
+                    "content": 1,
+                    "score": 1,
+                    "metadata": 1,
+                    "raw_content": 1
+                }}
+            ]
+            return list(self.articles.aggregate(pipeline))
         except Exception as e:
             logger.error(f"Error getting articles: {e}")
             return []
