@@ -1,17 +1,14 @@
-# src/research/database/db.py
 """
 Database operations with basic search support for MongoDB Atlas Basic Plan
+Applied: codeStructure_001, codeStructure_003
 """
 from typing import List, Dict, Optional
 from datetime import datetime
 import logging
-from pymongo import MongoClient, ASCENDING, TEXT
-import os
-from dotenv import load_dotenv
+from pymongo import ASCENDING, TEXT
 from bson.objectid import ObjectId
 from ..exceptions import DatabaseError
-
-load_dotenv()
+from .db_connection import get_db, get_collection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,8 +19,7 @@ class ResearchDatabase:
     
     def __init__(self):
         """Initialize database connection and collections"""
-        self.client = MongoClient(os.getenv('MONGODB_URI'))
-        self.db = self.client[os.getenv('MONGODB_DB_NAME', 'research_db')]
+        self.db = get_db()
         
         # Collections
         self.sessions = self.db.sessions
