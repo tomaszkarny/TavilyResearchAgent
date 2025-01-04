@@ -319,23 +319,30 @@ class ResearchManager:
                         session_id=session_id
                     )
                 
-                # Update session status for processing
-                self.db.update_session(session_id, {'status': 'processing'})
-                
                 # Process and deduplicate results 
                 seen_urls = {}
                 for result in all_results:
-                    url = result.get('url', '').lower()
+                    # Normalize URL for comparison
+                    url = result.get('url', '').lower().rstrip('/')
                     current_score = result.get('score', 0)
-                    if url not in seen_urls or current_score > seen_urls[url].get('score', 0):  # Bezpieczny dostęp
+                    
+                    # Skip invalid URLs
+                    if not url:
+                        logger.warning(f"Skipping result with invalid URL: {result.get('title', 'No title')}")
+                        continue
+                        
+                    # Keep result with higher score for same URL
+                    if url not in seen_urls or current_score > seen_urls[url].get('score', 0):
                         seen_urls[url] = result
+                        logger.debug(f"Keeping result for URL {url} with score {current_score}")
                 
                 all_results = list(seen_urls.values())
-                   
+                logger.info(f"After initial deduplication: {len(all_results)} unique results")
+                
                 prioritized_results = []
                 other_results = []
                 for result in all_results:
-                    url = result.get('url', '').lower()
+                    url = result.get('url', '').lower().rstrip('/')
                     is_preferred = any(domain.lower() in url for domain in (include_domains or []))
                     if is_preferred:
                      prioritized_results.append(result)
@@ -361,7 +368,43 @@ class ResearchManager:
                         config=session.to_search_config(),
                         session_id=session_id
                     )
-                    final_results.extend(additional_results)
+                    
+                    # Deduplicate additional results
+                    for result in additional_results:
+                        url = result.get('url', '').lower().rstrip('/')
+                        if not url:
+                            continue
+                            
+                        current_score = result.get('score', 0)
+                        exists = False
+                        
+                        # Check against existing final_results
+                        for existing in final_results:
+                            if existing.get('url', '').lower().rstrip('/') == url:
+                                exists = True
+                                if current_score > existing.get('score', 0):
+                                    final_results.remove(existing)
+                                    final_results.append(result)
+                                    logger.debug(f"Replaced existing result with higher scored version: {url}")
+                                break
+                                
+                        if not exists:
+                            final_results.append(result)
+                            logger.debug(f"Added new result from additional search: {url}")
+                
+                # Final deduplication before database insertion
+                final_deduped = {}
+                for article in final_results:
+                    url = article.get('url', '').lower().rstrip('/')
+                    if not url:
+                        continue
+                        
+                    current_score = article.get('score', 0)
+                    if url not in final_deduped or current_score > final_deduped[url].get('score', 0):
+                        final_deduped[url] = article
+                
+                final_results = list(final_deduped.values())
+                logger.info(f"Final deduplicated results count: {len(final_results)}")
                 
                 # Save results to database
                 for article in final_results:
