@@ -3,7 +3,7 @@ Database operations with basic search support for MongoDB Atlas Basic Plan
 Applied: codeStructure_001, codeStructure_003
 """
 from typing import List, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from pymongo import ASCENDING, TEXT
 from bson.objectid import ObjectId
@@ -248,14 +248,29 @@ class ResearchDatabase:
             
         Returns:
             Session document or None if not found
+            
+        Raises:
+            ValueError: If session_id is invalid
+            DatabaseError: If database operation fails
         """
         try:
+            if not session_id:
+                raise ValueError("session_id cannot be empty")
+                
             if isinstance(session_id, str):
-                session_id = ObjectId(session_id)
+                try:
+                    session_id = ObjectId(session_id)
+                except Exception as e:
+                    raise ValueError(f"Invalid session_id format: {str(e)}")
                 
             session = self.sessions.find_one({'_id': session_id})
+            if not session:
+                logger.warning(f"Session {session_id} not found")
             return session
             
+        except ValueError as e:
+            logger.error(f"Invalid session_id {session_id}: {e}")
+            raise
         except Exception as e:
             logger.error(f"Error getting session {session_id}: {e}")
             raise DatabaseError(f"Failed to get session: {str(e)}")
@@ -303,3 +318,50 @@ class ResearchDatabase:
         except Exception as e:
             logger.error(f"Text search failed: {e}")
             return []
+    
+    def cleanup_old_sessions(self, days_old: int = 30) -> Dict:
+        """
+        Remove sessions and their associated articles older than specified days
+        
+        Args:
+            days_old: Number of days after which to remove sessions
+            
+        Returns:
+            Dict containing cleanup statistics
+        """
+        try:
+            cutoff_date = datetime.utcnow() - timedelta(days=days_old)
+            
+            # Find old sessions
+            old_sessions = self.sessions.find({
+                'timestamp': {'$lt': cutoff_date}
+            })
+            session_ids = [str(s['_id']) for s in old_sessions]
+            
+            # Remove associated articles first
+            articles_result = self.articles.delete_many({
+                'session_id': {'$in': session_ids}
+            })
+            
+            # Remove sessions
+            sessions_result = self.sessions.delete_many({
+                'timestamp': {'$lt': cutoff_date}
+            })
+            
+            stats = {
+                'success': True,
+                'sessions_removed': sessions_result.deleted_count,
+                'articles_removed': articles_result.deleted_count,
+                'cutoff_date': cutoff_date.isoformat(),
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            
+            logger.info(
+                f"Cleanup complete: removed {stats['sessions_removed']} sessions "
+                f"and {stats['articles_removed']} articles older than {days_old} days"
+            )
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            raise DatabaseError(f"Cleanup operation failed: {str(e)}")
