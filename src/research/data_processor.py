@@ -64,7 +64,7 @@ class MiniProcessor:
         self.model = "gpt-4o-mini-2024-07-18"
     
     @retry(max_attempts=3, delay=1)
-    def process_article(self, content: str, title: str, url: str) -> Dict:
+    def process_article(self, content: str, title: str, url: str, metadata: Optional[Dict] = None) -> Dict:
         """Process single article using structured outputs"""
         try:
             messages = [
@@ -144,10 +144,11 @@ class MiniProcessor:
                 },
                 "score": analysis.relevance,
                 "metadata": {
-                    "published_date": "N/A",  # We don't have this from input
+                    "published_date": metadata.get('published_date') if metadata else "N/A",
                     "added_date": datetime.utcnow().isoformat(),
-                    "source": "web",
-                    "language": "en"
+                    "source": metadata.get('source', 'web'),
+                    "language": metadata.get('language', 'en'),
+                    "retrieved_at": metadata.get('retrieved_at') if metadata else None
                 },
                 "processed_at": datetime.utcnow()
             }
@@ -182,7 +183,8 @@ class MiniProcessor:
                     processed = self.process_article(
                         content=article['content'],
                         title=article['title'],
-                        url=article['url']
+                        url=article['url'],
+                        metadata=article.get('metadata', {})
                     )
                     processed_articles.append(processed)
                     
@@ -272,10 +274,31 @@ class MiniProcessor:
             raise ProcessingError(f"Failed to generate blog summary: {str(e)}")
 
     def _extract_key_findings(self, articles: List[Dict]) -> List[str]:
-        """Extract overall key findings from processed articles"""
+        """Extract overall key findings from processed articles, incorporating temporal context"""
         all_points = []
-        for article in articles:
-            all_points.extend(article['summary']['main_points'])
+        
+        # Sort articles by publication date for temporal context
+        sorted_articles = sorted(articles, 
+                               key=lambda x: x.get('metadata', {}).get('published_date', ''),
+                               reverse=True)
+        
+        for article in sorted_articles:
+            points = article['summary']['main_points']
+            metadata = article.get('metadata', {})
+            pub_date = metadata.get('published_date', '')
+            
+            # Add temporal context to significant findings if date exists
+            if pub_date:
+                try:
+                    # Convert to datetime for comparison
+                    pub_dt = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z')
+                    # Add temporal context to first point from each article
+                    if points:
+                        points[0] = f"As of {pub_dt.strftime('%B %d, %Y')}: {points[0]}"
+                except (ValueError, TypeError):
+                    pass
+                    
+            all_points.extend(points)
         
         # Remove duplicates while preserving order
         unique_points = list(dict.fromkeys(all_points))
