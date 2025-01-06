@@ -66,8 +66,7 @@ class ResearchVerifier:
                 metadata.get('published_date') or 
                 article.get('published_date') or 
                 metadata.get('date') or 
-                article.get('date') or 
-                'Not available'
+                article.get('date')
             )
             retrieved_at = metadata.get('retrieved_at')
         
@@ -77,7 +76,7 @@ class ResearchVerifier:
             elif isinstance(retrieved_at, str):
                 retrieved_at = retrieved_at
             else:
-                retrieved_at = 'N/A'
+                retrieved_at = None
         
             article_data = {
                 f"Article {idx}": {
@@ -85,9 +84,8 @@ class ResearchVerifier:
                     "URL": article.get('url', 'N/A'),
                     "Relevance Score": article.get('score', 0),
                     "Source": "Tavily Search",
-                    # More robust date handling
-                    "Published Date": published_date if published_date != 'Not available' else 'Not available',
-                    "Retrieved At": retrieved_at if retrieved_at != 'N/A' else 'Not available',
+                    "Published": published_date,
+                    "Retrieved": retrieved_at,
                     "Response Time": metadata.get('response_time', 'N/A'),
                     "Content Length": len(article.get('content', '')),
                     "Has Raw Content": bool(article.get('raw_content')),
@@ -116,30 +114,21 @@ def display_results(session_id: str) -> None:
         for article_dict in results["Articles"]:
             article_details = list(article_dict.values())[0]
 
-            url = article_details['URL']
-            if url in displayed_urls:
-                continue
-            displayed_urls.add(url)
+            # Debug logging
+            logger.info(f"Article details before display: {article_details}")
             
             # Basic information (always display)
-            print(f"Title: {article_details['Title']}")
+            print(f"\nTitle: {article_details['Title']}")
             print(f"URL: {article_details['URL']}")
             print(f"Relevance Score: {article_details['Relevance Score']:.2f}")
             print(f"Source: {article_details['Source']}")
             
-            # Display dates with better formatting
-            published_date = article_details['Published Date']
-            if published_date and published_date != 'Not available':
-                print(f"Published Date: {published_date}")
-            else:
-                print("Published Date: Not available")
-                
-            retrieved_at = article_details['Retrieved At']
-            if retrieved_at and retrieved_at != 'Not available':
-                print(f"Retrieved At: {retrieved_at}")
-            else:
-                print("Retrieved At: Not available")
-
+            # Display dates if available
+            if article_details.get('Published'):
+                print(f"Published: {article_details['Published']}")
+            if article_details.get('Retrieved'):
+                print(f"Retrieved: {article_details['Retrieved']}")
+            
             # Display optional metadata if available
             for field in ['Author', 'Language', 'Content Length', 'Response Time']:
                 if (field in article_details and 

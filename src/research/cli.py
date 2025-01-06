@@ -328,6 +328,8 @@ def main():
                         print(f"URL: {details['URL']}")
                         print(f"Relevance Score: {details['Relevance Score']:.2f}")
                         print(f"Source: {details['Source']}")
+                        if details.get('Published'):
+                            print(f"Published: {details['Published']}")
                         print("-" * 60)
         
         # 3. Process articles with GPT-4o-mini
