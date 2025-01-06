@@ -409,14 +409,19 @@ class ResearchManager:
                 # Save results to database
                 for article in final_results:
                     metadata = article.get('metadata', {})
-                    published_date = metadata.get('published_date') or metadata.get('date') or 'N/A'
-
-                     # Add debug logging
-                    logger.info(f"Saving article to database:")
-                    logger.info(f"Title: {article.get('title')}")
-                    logger.info(f"Original metadata: {metadata}")
-                    logger.info(f"Published date: {published_date}")
+                    # More robust date extraction
+                    published_date = (
+                        metadata.get('published_date') or 
+                        metadata.get('date') or 
+                        article.get('published_date') or
+                        article.get('date')
+                    )
                     
+                    if published_date == 'N/A' or not published_date:
+                        logger.warning(f"No publication date found for article: {article.get('title')}")
+                    else:
+                        logger.info(f"Found publication date: {published_date}")
+
                     article_doc = {
                         'session_id': session_id,
                         'title': article.get('title', 'N/A'),

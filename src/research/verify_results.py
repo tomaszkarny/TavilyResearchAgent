@@ -62,7 +62,13 @@ class ResearchVerifier:
             logger.info(f"Article metadata: {metadata}")
         
         # Handle dates more robustly
-            published_date = metadata.get('published_date', 'N/A')
+            published_date = (
+                metadata.get('published_date') or 
+                article.get('published_date') or 
+                metadata.get('date') or 
+                article.get('date') or 
+                'Not available'
+            )
             retrieved_at = metadata.get('retrieved_at')
         
         # Format retrieved_at date
@@ -79,16 +85,16 @@ class ResearchVerifier:
                     "URL": article.get('url', 'N/A'),
                     "Relevance Score": article.get('score', 0),
                     "Source": "Tavily Search",
-                # Dodanie daty publikacji
-                "Published Date": published_date if published_date != 'N/A' else 'Not available',
-                "Retrieved At": retrieved_at if retrieved_at != 'N/A' else 'Not available',
-                "Response Time": metadata.get('response_time', 'N/A'),
-                "Content Length": len(article.get('content', '')),
-                "Has Raw Content": bool(article.get('raw_content')),
-                "Author": metadata.get('author', 'N/A'),
-                "Language": metadata.get('language', 'N/A')
+                    # More robust date handling
+                    "Published Date": published_date if published_date != 'Not available' else 'Not available',
+                    "Retrieved At": retrieved_at if retrieved_at != 'N/A' else 'Not available',
+                    "Response Time": metadata.get('response_time', 'N/A'),
+                    "Content Length": len(article.get('content', '')),
+                    "Has Raw Content": bool(article.get('raw_content')),
+                    "Author": metadata.get('author', 'N/A'),
+                    "Language": metadata.get('language', 'N/A')
+                }
             }
-        }
             logger.info(f"Formatted article data: {article_data}")
             formatted_results["Articles"].append(article_data)
     
@@ -120,9 +126,19 @@ def display_results(session_id: str) -> None:
             print(f"URL: {article_details['URL']}")
             print(f"Relevance Score: {article_details['Relevance Score']:.2f}")
             print(f"Source: {article_details['Source']}")
-            print(f"Published Date: {article_details['Published Date']}")
-            print(f"Retrieved At: {article_details['Retrieved At']}")
-            print(f"Response Time: {article_details['Response Time']}")
+            
+            # Display dates with better formatting
+            published_date = article_details['Published Date']
+            if published_date and published_date != 'Not available':
+                print(f"Published Date: {published_date}")
+            else:
+                print("Published Date: Not available")
+                
+            retrieved_at = article_details['Retrieved At']
+            if retrieved_at and retrieved_at != 'Not available':
+                print(f"Retrieved At: {retrieved_at}")
+            else:
+                print("Retrieved At: Not available")
 
             # Display optional metadata if available
             for field in ['Author', 'Language', 'Content Length', 'Response Time']:

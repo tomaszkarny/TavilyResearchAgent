@@ -319,6 +319,39 @@ class ResearchDatabase:
             logger.error(f"Text search failed: {e}")
             return []
     
+    def inspect_session_articles(self, session_id: str) -> List[Dict]:
+        """
+        Inspect articles for a specific session with focus on metadata and dates
+        
+        Args:
+            session_id: ID of the research session
+            
+        Returns:
+            List of articles with their metadata
+        """
+        try:
+            # Find all articles for the session
+            articles = list(self.articles.find({"session_id": session_id}))
+            
+            # Log inspection results
+            logger.info(f"\nInspecting articles for session {session_id}")
+            logger.info(f"Found {len(articles)} articles")
+            
+            for article in articles:
+                metadata = article.get('metadata', {})
+                logger.info(f"\nArticle: {article.get('title')}")
+                logger.info(f"URL: {article.get('url')}")
+                logger.info(f"Published date: {metadata.get('published_date')}")
+                logger.info(f"Added date: {metadata.get('added_date')}")
+                logger.info(f"Retrieved at: {metadata.get('retrieved_at')}")
+                logger.info(f"Full metadata: {metadata}")
+            
+            return articles
+            
+        except Exception as e:
+            logger.error(f"Failed to inspect session articles: {e}")
+            raise DatabaseError(f"Session inspection failed: {e}")
+    
     def cleanup_old_sessions(self, days_old: int = 30) -> Dict:
         """
         Remove sessions and their associated articles older than specified days

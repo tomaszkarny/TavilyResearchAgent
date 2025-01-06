@@ -110,8 +110,19 @@ class HybridResearchClient:
             # Log complete result data for debugging
             logger.info(f"\nResult {i+1} complete data:")
             logger.info(f"Available fields: {list(result.keys())}")
-            logger.info(f"Published date: {result.get('published_date')}")
-            logger.info(f"Title: {result.get('title')}")
+            
+            # Extract publication date with fallbacks
+            published_date = (
+                result.get('published_date') or
+                result.get('date') or
+                result.get('metadata', {}).get('published_date') or
+                result.get('metadata', {}).get('date')
+            )
+            
+            if published_date:
+                logger.info(f"Found publication date in Tavily response: {published_date}")
+            else:
+                logger.warning(f"No publication date found for article: {result.get('title')}")
             
             processed = {
                 'title': result.get('title', 'N/A'),
@@ -122,7 +133,7 @@ class HybridResearchClient:
                 'source': 'web',
                 'metadata': {
                     'source': 'tavily',
-                    'published_date': result.get('published_date'),
+                    'published_date': published_date,
                     'retrieved_at': datetime.utcnow()
                 }
             }
