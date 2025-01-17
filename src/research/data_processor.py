@@ -254,8 +254,21 @@ class MiniProcessor:
                 messages=[
                     {
                         "role": "system",
-                        "content": """Generate an engaging blog post based on the research data.
-                        Include key insights, trends, and practical applications."""
+                        "content": """You are a blog post generator. Return your response as a valid JSON object following this exact schema:
+{
+    "title": "string",
+    "introduction": "string",
+    "key_sections": [{
+        "heading": "string",
+        "content": "string",
+        "key_points": ["string"]
+    }],
+    "conclusion": "string"
+}
+
+Generate an engaging blog post based on the research data. Include key insights, trends, and practical applications.
+
+Your output MUST be strictly valid JSON matching the schema above."""
                     },
                     {
                         "role": "user",
