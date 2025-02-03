@@ -241,7 +241,7 @@ class MiniProcessor:
             raise ProcessingError(f"Failed to process session: {str(e)}")
 
     def generate_blog_summary(self, session_id: str) -> Dict:
-        """Generate blog post from processed research data"""
+        """Generate blog post from processed research data and save to database"""
         try:
             session_data = self.db.get_session(session_id)
             if not session_data or not session_data.get('processed_data'):
@@ -280,6 +280,19 @@ Your output MUST be strictly valid JSON matching the schema above."""
             )
             
             blog_content = BlogPost.model_validate_json(completion.choices[0].message.content)
+            
+            # Save blog post to database and update session metadata
+            # Note: update_session() automatically wraps the update data with $set
+            self.db.update_session(
+                session_id,
+                {
+                    'blog_post': blog_content.model_dump(),
+                    'blog_generated': True,
+                    'blog_generated_at': datetime.utcnow()
+                }
+            )
+            
+            logger.info(f"Blog post generated and saved for session {session_id}")
             return blog_content.model_dump()
 
         except Exception as e:
