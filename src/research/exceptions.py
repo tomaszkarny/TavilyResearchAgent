@@ -22,6 +22,10 @@ class ConfigurationError(ResearchError):
     """Raised when configuration is invalid or missing"""
     pass
 
+class ValidationError(ResearchError):
+    """Raised when input validation fails"""
+    pass
+
 class ProcessingError(Exception):
     """Custom exception for research data processing errors"""
     pass

@@ -9,10 +9,31 @@ and retrieves processed article data for a given research session.
 
 import sys
 import logging
-from typing import Dict, List
+from typing import Dict, List, TypedDict, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 from bson.objectid import ObjectId
+from src.research.exceptions import DatabaseError, ValidationError
+
+# Type definitions
+class ExpertOpinion(TypedDict):
+    expert: str
+    quote: str
+
+class ArticleSummary(TypedDict, total=False):
+    summary: str
+    main_points: List[str]
+    key_statistics: List[str]
+    practical_tips: List[str]
+    expert_opinions: List[ExpertOpinion]
+
+class Article(TypedDict):
+    title: str
+    url: str
+    score: float
+    metadata: Dict
+    summary: ArticleSummary
+    processed_at: datetime
 
 # Configure logging
 logging.basicConfig(
@@ -72,7 +93,7 @@ def format_summary(summary: Dict) -> str:
     
     return "\n".join(sections)
 
-def extract_processed_articles(session_id: str) -> List[Dict]:
+def extract_processed_articles(session_id: str) -> List[Article]:
     """
     Extract processed articles for a given session from MongoDB.
     
@@ -89,27 +110,31 @@ def extract_processed_articles(session_id: str) -> List[Dict]:
         # Import here to avoid circular imports
         from src.research.database.db_connection import get_collection
         
+        if not session_id:
+            raise ValidationError("Session ID cannot be empty")
+            
         # Get the sessions collection
-        sessions = get_collection('sessions')
+        try:
+            sessions = get_collection('sessions')
+        except Exception as e:
+            raise DatabaseError(f"Failed to connect to database: {str(e)}")
         
         # Convert string ID to ObjectId if needed
         try:
             if len(session_id) == 24:  # Length of a standard ObjectId
                 session_id = ObjectId(session_id)
-        except Exception:
-            pass  # Keep original string ID if conversion fails
+        except Exception as e:
+            raise ValidationError(f"Invalid session ID format: {str(e)}")
         
         logger.info(f"Attempting to retrieve session with ID: {session_id}")
         session = sessions.find_one({"_id": session_id})
         
         if not session:
-            logger.error(f"No session found with ID: {session_id}")
-            sys.exit(1)
+            raise DatabaseError(f"No session found with ID: {session_id}")
         
         processed_data = session.get("processed_data")
         if not processed_data:
-            logger.error("No processed_data found in this session")
-            sys.exit(1)
+            raise DatabaseError("No processed_data found in this session")
         
         articles = processed_data.get("articles", [])
         if not articles:
@@ -119,9 +144,12 @@ def extract_processed_articles(session_id: str) -> List[Dict]:
         logger.info(f"Found {len(articles)} processed articles")
         return articles
         
+    except (DatabaseError, ValidationError) as e:
+        logger.error(str(e))
+        raise
     except Exception as e:
-        logger.error(f"Error retrieving session data: {e}")
-        sys.exit(1)
+        logger.error(f"Unexpected error retrieving session data: {e}")
+        raise DatabaseError(f"Failed to retrieve session data: {str(e)}")
 
 def display_articles(articles: List[Dict]):
     """Display formatted article information"""
