@@ -42,18 +42,6 @@ class ArticleAnalysis(BaseModel):
         le=1.0
     )
 
-class BlogSection(BaseModel):
-    """Schema for blog section"""
-    heading: str = Field(description="Section heading")
-    content: str = Field(description="Section content")
-    key_points: List[str] = Field(description="Key points of the section")
-
-class BlogPost(BaseModel):
-    """Schema for blog post generation"""
-    title: str = Field(description="Blog post title")
-    introduction: str = Field(description="Opening paragraph")
-    key_sections: List[BlogSection] = Field(description="Blog sections")
-    conclusion: str = Field(description="Closing paragraph")
 
 class MiniProcessor:
     """Process research data using GPT-4o-mini model"""
@@ -204,10 +192,9 @@ class MiniProcessor:
                         'error': str(e)
                     })
 
-            # Create final summary
+            # Create final summary with all processed article data
             summary = {
                 'topic': self.db.get_session(session_id)['query'],
-                'key_findings': self._extract_key_findings(processed_articles),
                 'articles': processed_articles,
                 'created_at': datetime.utcnow()
             }
@@ -223,6 +210,7 @@ class MiniProcessor:
                     'success_rate': len(processed_articles) / len(articles)
                 }
             )
+            logger.info(f"Processed articles saved in the database for session {session_id}")
 
             logger.info(f"Successfully processed session {session_id}")
             logger.info(f"Processed {len(processed_articles)} articles, {len(failed_articles)} failed")
@@ -240,64 +228,8 @@ class MiniProcessor:
             )
             raise ProcessingError(f"Failed to process session: {str(e)}")
 
-    def generate_blog_summary(self, session_id: str) -> Dict:
-        """Generate blog post from processed research data and save to database"""
-        try:
-            session_data = self.db.get_session(session_id)
-            if not session_data or not session_data.get('processed_data'):
-                raise ProcessingError("No processed data found for session")
-
-            research_data = session_data['processed_data']
-            
-            completion = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a blog post generator. Return your response as a valid JSON object following this exact schema:
-{
-    "title": "string",
-    "introduction": "string",
-    "key_sections": [{
-        "heading": "string",
-        "content": "string",
-        "key_points": ["string"]
-    }],
-    "conclusion": "string"
-}
-
-Generate an engaging blog post based on the research data. Include key insights, trends, and practical applications.
-
-Your output MUST be strictly valid JSON matching the schema above."""
-                    },
-                    {
-                        "role": "user",
-                        "content": str(research_data)
-                    }
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.7
-            )
-            
-            blog_content = BlogPost.model_validate_json(completion.choices[0].message.content)
-            
-            # Save blog post to database and update session metadata
-            # Note: update_session() automatically wraps the update data with $set
-            self.db.update_session(
-                session_id,
-                {
-                    'blog_post': blog_content.model_dump(),
-                    'blog_generated': True,
-                    'blog_generated_at': datetime.utcnow()
-                }
-            )
-            
-            logger.info(f"Blog post generated and saved for session {session_id}")
-            return blog_content.model_dump()
-
-        except Exception as e:
-            logger.error(f"Error generating blog summary: {e}")
-            raise ProcessingError(f"Failed to generate blog summary: {str(e)}")
+    # Removed the blog post generation functionality as it is no longer required.
+    # All extracted article data is now stored directly in the database.
 
     def _extract_key_findings(self, articles: List[Dict]) -> List[str]:
         """Extract overall key findings from processed articles, incorporating temporal context"""
