@@ -46,7 +46,7 @@ class ResearchClient:
         if not self.mock_mode:
             try:
                 from tavily import TavilyHybridClient
-                from ..database.mongodb_config import get_collection
+                from ..database.db_connection import get_collection
                 
                 self.collection = get_collection()
                 self.client = TavilyHybridClient(
