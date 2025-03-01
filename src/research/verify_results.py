@@ -3,6 +3,7 @@
 Verify and display research results with hybrid search support
 """
 import logging
+import textwrap
 from typing import Dict, List, Optional
 from .database.db import ResearchDatabase
 from .exceptions import DatabaseError
@@ -148,9 +149,68 @@ def display_results(session_id: str) -> None:
         
      
 
+def generate_key_findings(articles: List[Dict], max_findings: int = 5) -> List[str]:
+    """
+    Generate key findings from article summaries if they're not already available
+    
+    Args:
+        articles: List of processed article dictionaries
+        max_findings: Maximum number of key findings to generate
+    Returns:
+        List[str]: Generated key findings
+    """
+    # Initialize findings list
+    findings = []
+    
+    # Extract main points from articles and deduplicate
+    unique_points = set()
+    
+    for article in articles:
+        if 'summary' in article and 'main_points' in article['summary']:
+            for point in article['summary']['main_points']:
+                # Create a simplified version for deduplication (lowercase, remove punctuation)
+                simple_point = ''.join(c.lower() for c in point if c.isalnum() or c.isspace())
+                if simple_point not in unique_points and len(simple_point) > 20:  # Avoid very short points
+                    unique_points.add(simple_point)
+                    findings.append(point)
+    
+    # Sort findings by length and take the top ones (prefer more detailed findings)
+    findings.sort(key=len, reverse=True)
+    return findings[:max_findings]
+
+
+def display_long_text(text: str, width: int = 80, chunk_size: int = 2000) -> None:
+    """
+    Display long text content in chunks to prevent terminal truncation
+    
+    Args:
+        text: The long text content to display
+        width: Line width for text wrapping
+        chunk_size: Maximum characters to display at once
+    """
+    # First wrap the text to the specified width
+    wrapped_text = textwrap.fill(text, width=width)
+    
+    # If text is shorter than chunk_size, just print it all
+    if len(wrapped_text) <= chunk_size:
+        print(wrapped_text)
+        return
+    
+    # Otherwise, display it in chunks with pagination
+    chunks = [wrapped_text[i:i+chunk_size] for i in range(0, len(wrapped_text), chunk_size)]
+    
+    # Display the first chunk immediately
+    print(chunks[0])
+    
+    # Display remaining chunks with pagination
+    for i, chunk in enumerate(chunks[1:], 1):
+        input(f"\n--- Press Enter to continue reading ({i}/{len(chunks)-1}) ---")
+        print(chunk)
+
+
 def display_processed_data(session_id: str) -> Optional[Dict]:
     """
-    Display processed data for a research session
+    Display processed data for a research session with pagination to prevent terminal truncation
 
     Args:
         session_id: Database session ID
@@ -199,8 +259,18 @@ def display_processed_data(session_id: str) -> Optional[Dict]:
         print("KEY FINDINGS")
         print("-" * 20)
         try:
-            for i, finding in enumerate(data['key_findings'], 1):
-                print(f"\n{i}. {finding}")
+            key_findings = data.get('key_findings', [])
+            
+            # Generate key findings if none exist
+            if not key_findings and 'articles' in data and len(data['articles']) > 0:
+                key_findings = generate_key_findings(data['articles'])
+                
+            if key_findings:
+                for i, finding in enumerate(key_findings, 1):
+                    print(f"\n{i}. {finding}")
+            else:
+                logger.warning("No key findings available")
+                print("\nNo key findings available")
         except KeyError:
             logger.warning("No key findings available")
             print("\nNo key findings available")
@@ -218,7 +288,7 @@ def display_processed_data(session_id: str) -> Optional[Dict]:
                 reverse=True
             )
 
-            for article in articles:
+            for article_idx, article in enumerate(articles):
                 print("\n" + "-" * 40)
                 print(f"Title: {article['title']}")
                 print(f"URL: {article['url']}")
@@ -232,42 +302,56 @@ def display_processed_data(session_id: str) -> Optional[Dict]:
                 print(f"🌐 Source: {metadata.get('source', 'web')}")
                 print(f"🗣 Language: {metadata.get('language', 'en')}")
 
+                # Pagination for article content to prevent truncation
                 try:
-                    print("\nMain Points:")
-                    for point in article['summary']['main_points']:
-                        print(f"• {point}")
+                    main_points = article['summary']['main_points']
+                    if main_points:
+                        print("\nMain Points:")
+                        for i, point in enumerate(main_points):
+                            print(f"• {point}")
                 except KeyError:
                     logger.warning("Missing main_points in article summary")
                     print("Main points not available")
 
                 try:
-                    print("\nKey Statistics:")
-                    for stat in article['summary'].get('key_statistics', []):
-                        print(f"📊 {stat}")
+                    stats = article['summary'].get('key_statistics', [])
+                    if stats:
+                        print("\nKey Statistics:")
+                        for stat in stats:
+                            print(f"📊 {stat}")
                 except KeyError:
                     logger.warning("Missing key_statistics in article summary")
                 
                 try:
-                    print("\nPractical Tips:")
-                    for tip in article['summary'].get('practical_tips', []):
-                        print(f"💡 {tip}")
+                    tips = article['summary'].get('practical_tips', [])
+                    if tips:
+                        print("\nPractical Tips:")
+                        for tip in tips:
+                            print(f"💡 {tip}")
                 except KeyError:
                     logger.warning("Missing practical_tips in article summary")
 
                 try:
-                    print("\nExpert Opinions:")
-                    for opinion in article['summary'].get('expert_opinions', []):
-                        if opinion.get('expert') and opinion.get('quote'):
-                            print(f"👤 {opinion['expert']}: \"{opinion['quote']}\"")
+                    opinions = article['summary'].get('expert_opinions', [])
+                    if opinions:
+                        print("\nExpert Opinions:")
+                        for opinion in opinions:
+                            if opinion.get('expert') and opinion.get('quote'):
+                                print(f"👤 {opinion['expert']}: \"{opinion['quote']}\"")
                 except KeyError:
                     logger.warning("Missing expert_opinions in article summary")
 
                 try:
-                    print("\nDetailed Summary:")
-                    print(article['summary']['summary'])
+                    if summary := article['summary'].get('summary'):
+                        print("\nDetailed Summary:")
+                        display_long_text(summary)
                 except KeyError:
                     logger.warning("Missing detailed summary in article")
                     print("Detailed summary not available")
+                
+                # Add pagination prompt after every 2 articles except the last
+                if article_idx < len(articles) - 1 and (article_idx + 1) % 2 == 0:
+                    input("\nPress Enter to continue viewing articles...")
 
         except KeyError:
             logger.error("Missing required article data")
