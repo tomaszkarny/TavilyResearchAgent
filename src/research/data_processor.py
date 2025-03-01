@@ -8,6 +8,7 @@ import logging
 from .database.db import ResearchDatabase
 from .exceptions import ProcessingError
 from .utils import retry
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -261,3 +262,109 @@ class MiniProcessor:
         # Remove duplicates while preserving order
         unique_points = list(dict.fromkeys(all_points))
         return unique_points[:10]  # Return top 10 findings
+        
+    def generate_blog_summary(self, session_id: str) -> Dict:
+        """
+        Generate a blog post summary from processed research data
+        
+        Args:
+            session_id: Database session ID
+            
+        Returns:
+            Dict with blog structure (title, introduction, key_sections, conclusion)
+        """
+        try:
+            # Get session data
+            session = self.db.get_session(session_id)
+            if not session:
+                raise ProcessingError(f"Session {session_id} not found")
+                
+            # Check if session has processed data
+            if not session.get('processed_data'):
+                raise ProcessingError(f"Session {session_id} has no processed data")
+                
+            processed_data = session['processed_data']
+            topic = processed_data['topic']
+            articles = processed_data['articles']
+            
+            # Format content for API request
+            content = {
+                "topic": topic,
+                "num_articles": len(articles),
+                "key_findings": self._extract_key_findings(articles),
+                "statistics": [stat for article in articles 
+                              for stat in article['summary'].get('key_statistics', [])[:3]],
+                "practical_tips": [tip for article in articles 
+                                  for tip in article['summary'].get('practical_tips', [])[:3]]
+            }
+            
+            # Make request to OpenAI API
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": f"""You are a professional blog writer specializing in creating engaging, research-based content.
+                    
+Your response must be a valid JSON object with the following structure:
+{{
+  "title": "An engaging, SEO-friendly blog post title",
+  "introduction": "Compelling introduction that hooks the reader (300-500 words)",
+  "key_sections": [
+    {{
+      "heading": "Section 1 Heading",
+      "content": "Detailed content for section 1"
+    }},
+    {{
+      "heading": "Section 2 Heading",
+      "content": "Detailed content for section 2"
+    }}
+    // 3-5 sections total
+  ],
+  "conclusion": "Summary of key points and final thoughts (200-300 words)"
+}}
+                    """},
+                    {"role": "user", "content": f"""
+                    Create a comprehensive blog post about {topic} based on the following research:
+                    
+                    Key findings from {len(articles)} articles:
+                    {chr(10).join([f"- {finding}" for finding in content['key_findings']])}
+                    
+                    Key statistics:
+                    {chr(10).join([f"- {stat}" for stat in content['statistics']])}
+                    
+                    Practical advice:
+                    {chr(10).join([f"- {tip}" for tip in content['practical_tips']])}
+                    
+                    Requirements:
+                    1. Write in a professional but accessible tone
+                    2. Include at least 3 main sections with clear headings
+                    3. Incorporate statistics where relevant
+                    4. Provide practical guidance and takeaways
+                    5. Create a compelling introduction and conclusion
+                    """}
+                ],
+                max_tokens=4000,
+                temperature=0.7,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse response
+            blog_content = response.choices[0].message.content
+            
+            # If JSON string rather than object, parse it
+            if isinstance(blog_content, str):
+                blog_content = json.loads(blog_content)
+                
+            # Update session with blog content
+            self.db.update_session(
+                session_id=session_id,
+                update_data={
+                    'blog_content': blog_content,
+                    'blog_generated_at': datetime.utcnow().isoformat()
+                }
+            )
+            
+            return blog_content
+            
+        except Exception as e:
+            logger.error(f"Error generating blog summary: {str(e)}")
+            raise ProcessingError(f"Failed to generate blog summary: {str(e)}")

@@ -8,3 +8,4 @@ openai>=1.12.0
 tavily-python==0.3.7
 black==23.12.1
 cohere
+tiktoken==0.7.0

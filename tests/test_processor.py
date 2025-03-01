@@ -2,7 +2,7 @@
 Test script for data processing and blog generation
 """
 import logging
-from src.research.data_processor import ResearchDataProcessor
+from src.research.data_processor import MiniProcessor
 from src.research.blog_generator import BlogPostGenerator
 
 # Configure logging
@@ -14,7 +14,7 @@ def test_processing_flow():
     session_id = "673fb8cf7a721f3920df8e96"  # Our session ID
     
     # Initialize processors
-    data_processor = ResearchDataProcessor()
+    data_processor = MiniProcessor()
     blog_generator = BlogPostGenerator()
     
     try:

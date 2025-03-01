@@ -1,7 +1,8 @@
 from typing import List, Dict, Optional
 import logging
 from datetime import datetime
-from .data_processor import ResearchDataProcessor
+import tiktoken
+from .data_processor import MiniProcessor
 from .exceptions import ProcessingError
 
 logging.basicConfig(level=logging.INFO)
@@ -12,7 +13,7 @@ class BlogPostGenerator:
     
     def __init__(self):
         """Initialize generator"""
-        self.processor = ResearchDataProcessor()
+        self.processor = MiniProcessor()
     
     def generate_blog_prompt(self, session_id: str) -> str:
         """
@@ -59,7 +60,7 @@ Please generate the blog post now:
     
     def split_content_chunks(self, content: str, max_tokens: int = 4000) -> List[str]:
         """
-        Split content into manageable chunks for LLM
+        Split content into manageable chunks for LLM based on actual token count
         
         Args:
             content: Content to split
@@ -68,27 +69,30 @@ Please generate the blog post now:
         Returns:
             List of content chunks
         """
-        # Simple splitting by paragraphs
-        paragraphs = content.split('\n\n')
+        # Handle empty content edge case
+        if not content:
+            return [""]
+            
+        # Use encoding for GPT-4o-mini model
+        encoding = tiktoken.encoding_for_model("gpt-4o-mini")
+        tokens = encoding.encode(content)
         chunks = []
         current_chunk = []
-        current_length = 0
+        current_count = 0
         
-        for para in paragraphs:
-            para_length = len(para.split())  # Approximate tokens by words
-            
-            if current_length + para_length > max_tokens:
-                # Save current chunk
-                chunks.append('\n\n'.join(current_chunk))
-                current_chunk = [para]
-                current_length = para_length
+        for token in tokens:
+            if current_count + 1 > max_tokens:
+                # Save current chunk and start a new one
+                chunks.append(encoding.decode(current_chunk))
+                current_chunk = [token]
+                current_count = 1
             else:
-                current_chunk.append(para)
-                current_length += para_length
+                current_chunk.append(token)
+                current_count += 1
         
-        # Add last chunk
+        # Add last chunk if it exists
         if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
+            chunks.append(encoding.decode(current_chunk))
         
         return chunks
     

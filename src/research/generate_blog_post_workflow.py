@@ -15,20 +15,33 @@ import os
 from openai import OpenAI
 from datetime import datetime
 from dotenv import load_dotenv
+from typing import List
+import tiktoken
 
-# Import the extract_processed_articles function from the existing script. Adjust the import if necessary.
+# Import the extract_processed_articles function from the existing script.
+import sys
+import os
+
+# Add the project root to Python path to find modules
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, project_root)
+
+# Now import the extract_processed_articles function
 from extract_processed_articles import extract_processed_articles
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Set default level to INFO
+    level=logging.DEBUG,  # Set default level to DEBUG
     format='%(asctime)s - %(levelname)s - %(message)s',
     force=True  # Ensure our logging configuration takes precedence
 )
 
-# Set our module's logger to DEBUG while keeping others at INFO or higher
+# Set our module's logger to DEBUG
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+# Explicitly log that debug is enabled
+logger.debug("DEBUG logging is enabled")
 
 # Reduce noise from other loggers
 logging.getLogger('urllib3').setLevel(logging.INFO)
@@ -108,26 +121,109 @@ Please generate the blog post now.\n"""
     return prompt
 
 
+def split_content_chunks(content: str, max_tokens: int = 4000) -> List[str]:
+    """
+    Split content into manageable chunks for LLM based on actual token count
+    
+    Args:
+        content: Content to split
+        max_tokens: Maximum tokens per chunk
+        
+    Returns:
+        List of content chunks
+    """
+    # Handle empty content edge case
+    if not content:
+        return [""]
+        
+    # Use encoding for GPT-4o-mini model
+    encoding = tiktoken.encoding_for_model("gpt-4o-mini")
+    tokens = encoding.encode(content)
+    chunks = []
+    current_chunk = []
+    current_count = 0
+    
+    for token in tokens:
+        if current_count + 1 > max_tokens:
+            # Save current chunk and start a new one
+            chunks.append(encoding.decode(current_chunk))
+            current_chunk = [token]
+            current_count = 1
+        else:
+            current_chunk.append(token)
+            current_count += 1
+    
+    # Add last chunk if it exists
+    if current_chunk:
+        chunks.append(encoding.decode(current_chunk))
+    
+    return chunks
+
+
 def generate_blog_post(prompt):
     """
     Generate a blog post using the GPT-4o-mini model.
+    
+    If the prompt is too large, it will be split into chunks and processed
+    separately, then combined.
 
     Returns:
         str: The generated blog post.
     """
     try:
+        # Log a clear message before chunking
+        print("\n=== TESTING CHUNKING FUNCTIONALITY ===")
+        
+        # Check if the prompt needs to be chunked
+        chunks = split_content_chunks(prompt, max_tokens=4000)  # Adjust max_tokens as needed
+        
+        # Log token count for debugging using print for visibility
+        encoding = tiktoken.encoding_for_model("gpt-4o-mini")
+        token_count = len(encoding.encode(prompt))
+        print(f"Original prompt token count: {token_count}")
+        print(f"Chunking result: {len(chunks)} chunks created")
+        print(f"Chunk sizes: {[len(encoding.encode(chunk)) for chunk in chunks]}")
+        print("=== END OF CHUNKING TEST ===\n")
+        
+        # Also log using logger
+        logger.info(f"Original prompt token count: {token_count}")
+        logger.info(f"Chunking result: {len(chunks)} chunks created")
+        
         client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        response = client.chat.completions.create(
-            model="gpt-4o-mini-2024-07-18",
-            messages=[
-                {"role": "system", "content": "You are a professional blog writer."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=1500
-        )
-        blog_post = response.choices[0].message.content.strip()
-        return blog_post
+        
+        if len(chunks) > 1:
+            logger.info(f"Prompt split into {len(chunks)} chunks. Processing separately.")
+            blog_parts = []
+            
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)}...")
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=[
+                        {"role": "system", "content": "You are a professional blog writer."},
+                        {"role": "user", "content": chunk}
+                    ],
+                    temperature=0.7,
+                    max_tokens=1500
+                )
+                blog_parts.append(response.choices[0].message.content.strip())
+            
+            # Combine parts into final blog post
+            blog_post = "\n\n".join(blog_parts)
+            return blog_post
+        else:
+            # Process single chunk
+            response = client.chat.completions.create(
+                model="gpt-4o-mini-2024-07-18",
+                messages=[
+                    {"role": "system", "content": "You are a professional blog writer."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1500
+            )
+            blog_post = response.choices[0].message.content.strip()
+            return blog_post
     except Exception as e:
         logger.error(f"Error generating blog post: {e}")
         raise

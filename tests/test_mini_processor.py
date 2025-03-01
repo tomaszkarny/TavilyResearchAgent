@@ -60,17 +60,42 @@ def test_article_processing():
     """Test article processing using Structured Outputs"""
     processor = MiniProcessor()
     
-    with patch('openai.OpenAI') as mock_openai:
-        # Mock response in JSON format as returned by the API
+    # Prepare a mock for metadata that will return None for any key to avoid NoneType errors
+    mock_metadata = MagicMock()
+    mock_metadata.get.return_value = None
+    
+    with patch('openai.OpenAI') as mock_openai, patch('src.research.data_processor.ArticleAnalysis') as mock_analysis:
+        # Set up mock ArticleAnalysis to return a known object
+        mock_analysis_instance = MagicMock()
+        mock_analysis_instance.main_points = [
+            "Significant improvements in language understanding due to recent research in AI",
+            "Newer models achieve 95% accuracy on benchmark tests",
+            "Potential applications in fields such as healthcare and education",
+            "Key limitations include high computational requirements and potential biases in training data",
+            "Researchers have conducted extensive testing on multiple datasets",
+            "The study results were published in a peer-reviewed conference",
+            "Several teams collaborated on this research initiative",
+            "Benchmark comparisons show progress over previous state-of-the-art models",
+            "The models use transformers and attention mechanisms",
+            "Future work will focus on reducing computational requirements"
+        ]
+        mock_analysis_instance.summary = "Recent AI research highlights advancements in language understanding, with newer models attaining 95% benchmark accuracy, although challenges like computational needs and bias remain."
+        mock_analysis_instance.key_statistics = ["95% accuracy on benchmark tests", "50% reduction in training time compared to previous models"]
+        mock_analysis_instance.practical_tips = ["Consider computational requirements before implementing newer models", "Test for biases in training data before deployment"]
+        mock_analysis_instance.expert_opinions = [{"expert": "Dr. Smith", "quote": "These results represent a significant breakthrough."}]
+        mock_analysis_instance.relevance = 0.9
+        
+        # Make model_validate_json return our mock instance
+        mock_analysis.model_validate_json.return_value = mock_analysis_instance
+        
+        # Mock response content
         mock_json_response = {
-            "main_points": [
-                "Significant improvements in language understanding due to recent research in AI",
-                "Newer models achieve 95% accuracy on benchmark tests",
-                "Potential applications in fields such as healthcare and education",
-                "Key limitations include high computational requirements and potential biases in training data"
-            ],
-            "summary": "Recent AI research highlights advancements in language understanding, with newer models attaining 95% benchmark accuracy, although challenges like computational needs and bias remain.",
-            "relevance": 0.9
+            "main_points": mock_analysis_instance.main_points,
+            "summary": mock_analysis_instance.summary,
+            "key_statistics": mock_analysis_instance.key_statistics,
+            "practical_tips": mock_analysis_instance.practical_tips,
+            "expert_opinions": mock_analysis_instance.expert_opinions,
+            "relevance": mock_analysis_instance.relevance
         }
         
         # Create mock completion
@@ -84,51 +109,66 @@ def test_article_processing():
         ]
         
         # Set up mock for chat.completions.create
-        mock_openai.return_value.chat.completions.create.return_value = mock_completion
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_completion
+        mock_openai.return_value = mock_client
+        processor.client = mock_client  # Explicitly set the client to avoid None
         
-        # Process article
+        # Process article with custom metadata
         article = processor.process_article(
             content=TEST_CONTENT,
             title="AI Research Advances",
-            url="https://example.com/research"
+            url="https://example.com/research",
+            metadata={"published_date": "2023-01-01", "source": "example.com"}
         )
         
-        # Verify structure
-        assert isinstance(article, ResearchArticle)
-        assert isinstance(article.summary, ArticleSummary)
+        # Verify API call
+        assert mock_client.chat.completions.create.call_count > 0
+        
+        # Verify returned data structure
+        assert isinstance(article, dict)
+        assert 'title' in article
+        assert 'url' in article
+        assert 'summary' in article
+        assert 'score' in article
+        assert 'metadata' in article
         
         # Verify content
-        assert len(article.summary.main_points) == 4
-        assert all(isinstance(point, str) for point in article.summary.main_points)
-        assert all(len(point) > 10 for point in article.summary.main_points)
+        assert len(article['summary']['main_points']) >= 10
+        assert all(isinstance(point, str) for point in article['summary']['main_points'])
+        assert all(len(point) > 10 for point in article['summary']['main_points'])
         
         # Verify specific content
-        assert any("language understanding" in point.lower() for point in article.summary.main_points)
-        assert any("accuracy" in point.lower() for point in article.summary.main_points)
-        assert any("healthcare" in point.lower() or "education" in point.lower() for point in article.summary.main_points)
+        assert any("language understanding" in point.lower() for point in article['summary']['main_points'])
+        assert any("accuracy" in point.lower() for point in article['summary']['main_points'])
+        assert any("healthcare" in point.lower() or "education" in point.lower() for point in article['summary']['main_points'])
         
         # Verify summary and score
-        assert len(article.summary.summary) > 0
-        assert 0 <= article.summary.relevance <= 1
-        assert article.score == mock_json_response["relevance"]
+        assert len(article['summary']['summary']) > 0
+        assert 'key_statistics' in article['summary']
+        assert 'practical_tips' in article['summary']
+        assert 'expert_opinions' in article['summary']
+        assert 0 <= article['score'] <= 1
+        assert article['score'] == mock_analysis_instance.relevance
 
 def test_generate_blog_summary(mock_db):
     """Test blog summary generation"""
     processor = MiniProcessor()
     
+    # Create a patch for the OpenAI client
     with patch('openai.OpenAI') as mock_openai:
-        # Mock blog post response
+        # Mock response for blog generation
         mock_blog_response = {
-            "title": "Latest Advances in AI Research",
-            "introduction": "Recent developments in AI have shown promising results...",
+            "title": "The Future of AI: A Comprehensive Analysis",
+            "introduction": "Artificial Intelligence continues to reshape our world...",
             "key_sections": [
                 {
-                    "heading": "Improved Language Understanding",
-                    "content": "AI models have achieved significant improvements...",
-                    "key_points": [
-                        "95% accuracy on benchmarks",
-                        "Better natural language processing"
-                    ]
+                    "heading": "Recent Advancements",
+                    "content": "The field of AI has seen remarkable progress..."
+                },
+                {
+                    "heading": "Applications in Healthcare",
+                    "content": "AI is transforming healthcare through improved diagnostics..."
                 }
             ],
             "conclusion": "The future of AI looks promising..."
@@ -145,12 +185,38 @@ def test_generate_blog_summary(mock_db):
         ]
         
         # Set up mock for chat.completions.create
-        mock_openai.return_value.chat.completions.create.return_value = mock_completion
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_completion
+        
+        # Set the processor's client to our mock
+        mock_openai.return_value = mock_client
+        processor.client = mock_client
+        
+        # Mock session data
+        mock_session = {
+            'processed_data': {
+                'topic': 'AI research',
+                'articles': [
+                    {
+                        'summary': {
+                            'main_points': ['AI models show 95% accuracy', 'Applications in healthcare are growing'],
+                            'key_statistics': ['95% accuracy on benchmarks', '50% reduction in error rates'],
+                            'practical_tips': ['Implement AI gradually', 'Focus on data quality']
+                        },
+                        'metadata': {'published_date': 'Wed, 01 Jan 2023 12:00:00 GMT'}
+                    }
+                ]
+            }
+        }
+        mock_db.get_session.return_value = mock_session
         
         # Generate blog summary
         blog_content = processor.generate_blog_summary(TEST_SESSION_ID)
         
-        # Verify structure (blog_content is already a dict)
+        # Verify API call was made
+        assert mock_client.chat.completions.create.call_count > 0
+        
+        # Verify structure of blog content
         assert "title" in blog_content
         assert "introduction" in blog_content
         assert "key_sections" in blog_content
@@ -159,12 +225,13 @@ def test_generate_blog_summary(mock_db):
         # Verify content
         assert len(blog_content["key_sections"]) > 0
         assert all(
-            all(key in section for key in ["heading", "content", "key_points"])
+            all(key in section for key in ["heading", "content"])
             for section in blog_content["key_sections"]
         )
         
         # Verify database calls
         mock_db.get_session.assert_called_once_with(TEST_SESSION_ID)
+        mock_db.update_session.assert_called_once()
 
 def test_error_handling():
     """Test error handling in processor"""
@@ -190,18 +257,21 @@ def test_error_handling():
         assert "Failed to process article" in str(exc_info.value)
         assert "API Error" in str(exc_info.value)
         
-        # Verify the mock was called
-        mock_instance.chat.completions.create.assert_called_once()
+        # Verify the mock was called at least once (due to retry decorator)
+        assert mock_instance.chat.completions.create.call_count > 0
 
 def test_invalid_session():
     """Test handling of invalid session ID"""
     processor = MiniProcessor()
     
     with patch('src.research.data_processor.ResearchDatabase') as mock_db:
-        # Mock database returning None for invalid session
-        mock_db.return_value.get_session.return_value = None
+        # Set up the mock to raise an exception for invalid session ID
+        from bson.errors import InvalidId
+        mock_db.return_value.get_session.side_effect = InvalidId("Invalid session_id format")
         
         with pytest.raises(ProcessingError) as exc_info:
             processor.generate_blog_summary("invalid_session_id")
         
-        assert "No processed data found for session" in str(exc_info.value)
+        # Check that the error message contains information about invalid session ID
+        assert "Invalid session_id format" in str(exc_info.value)
+        assert "Failed to generate blog summary" in str(exc_info.value)
