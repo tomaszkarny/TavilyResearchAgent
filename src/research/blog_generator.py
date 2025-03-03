@@ -5,7 +5,6 @@ import tiktoken
 from .data_processor import MiniProcessor
 from .exceptions import ProcessingError
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class BlogPostGenerator:

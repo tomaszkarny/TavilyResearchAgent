@@ -2,18 +2,15 @@
 """
 Command-line interface for research tool with hybrid search support
 """
+from .logging_config import setup_logging
 from .manager import ResearchManager
 from .data_processor import MiniProcessor
 from .verify_results import ResearchVerifier, display_processed_data
-from .exceptions import ProcessingError
+from .exceptions import ProcessingError, SearchError
 from typing import List, Optional, Dict, Tuple
 import logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s'
-)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 # Rozszerzone predefiniowane źródła

@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 from .exceptions import ConfigurationError, SearchError, DocumentProcessingError
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv() 
 

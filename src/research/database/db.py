@@ -10,8 +10,6 @@ from bson.objectid import ObjectId
 from ..exceptions import DatabaseError
 from .db_connection import get_db, get_collection
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ResearchDatabase:

@@ -11,8 +11,6 @@ from .database.db import ResearchDatabase
 from .tavily_hybrid import HybridResearchClient, SearchConfig
 from .exceptions import SearchError, ConfigurationError
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class QueryBuilder:

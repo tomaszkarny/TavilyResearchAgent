@@ -13,8 +13,6 @@ from .exceptions import ConfigurationError, SearchError
 from .database.db import ResearchDatabase
 from tavily import TavilyClient
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
