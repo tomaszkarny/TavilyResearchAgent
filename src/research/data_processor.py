@@ -16,12 +16,26 @@ class ArticleAnalysis(BaseModel):
     """Enhanced schema for detailed article analysis"""
     main_points: List[str] = Field(
         description="Detailed key findings and insights from the article",
-        min_items=10,
-        max_items=15
+        min_items=15,
+        max_items=20
     )
     summary: str = Field(
         description="Comprehensive summary of the article content",
-        max_length=1000
+        max_length=1500
+    )
+    background: str = Field(
+        description="Background information or context about the topic"
+    )
+    key_findings: List[str] = Field(
+        description="The most important discoveries or conclusions",
+        min_items=1
+    )
+    implications: str = Field(
+        description="Potential impact or significance of the findings"
+    )
+    key_quotes: List[str] = Field(
+        description="Significant quotes or key sentences from the article",
+        min_items=0
     )
     key_statistics: List[str] = Field(
         description="Important numbers, percentages, and statistics from the article",
@@ -30,7 +44,7 @@ class ArticleAnalysis(BaseModel):
     )
     practical_tips: List[str] = Field(
         description="Actionable advice and practical recommendations",
-        min_items=0,
+        min_items=5,
         max_items=10
     )
     expert_opinions: List[Dict[str, str]] = Field(
@@ -87,42 +101,55 @@ class MiniProcessor:
                     "role": "system",
                     "content": """You are a precise research analyst. Analyze the article and extract information in the following structured format:
 
-                    1. REQUIRED - Main Points (MUST provide at least 10, up to 15 points):
+                    1. REQUIRED - Main Points (minimum 15, maximum 20 points):
                        - Extract detailed insights, not just surface information
                        - Each point should be a complete, informative sentence
                        - Cover different aspects of the topic
                        - Include both general and specific information
 
-                    2. REQUIRED - Summary (max 1000 chars):
-                       - Comprehensive yet concise
-                       - Cover key themes and findings
-                       - Maintain academic tone
+                    2. REQUIRED - Summary (max 1500 chars):
+                       - Provide a comprehensive summary covering key themes, findings, and implications
+                       - Maintain academic tone but ensure readability
 
-                    3. REQUIRED - Key Statistics:
-                       - Extract ALL numerical data
-                       - Include percentages, numbers, and measurements
+                    3. REQUIRED - Background Information:
+                       - Summarize the context or background of the topic discussed in the article
+
+                    4. REQUIRED - Key Findings:
+                       - Highlight the most important discoveries or conclusions from the article
+
+                    5. REQUIRED - Implications:
+                       - Discuss the potential impact or significance of the findings
+
+                    6. REQUIRED - Key Quotes:
+                       - Extract significant quotes or key sentences that capture the essence of the article
+                       - Format as ["quote1", "quote2", ...]
+
+                    7. REQUIRED - Key Statistics:
+                       - Extract ALL numerical data (percentages, numbers, measurements)
                        - Format as "X% of..." or "X people..."
                        - If no statistics found, provide empty array
 
-                    4. REQUIRED - Practical Tips:
-                       - Minimum 3 actionable recommendations
+                    8. REQUIRED - Practical Tips (minimum 5):
+                       - Provide specific, implementable recommendations
                        - Start each with a verb
-                       - Be specific and implementable
+                       - Be specific and actionable
                        - If none found, derive from content
 
-                    5. Expert Opinions:
-                       - Include any quoted experts
+                    9. Expert Opinions:
+                       - Include quoted experts or paraphrased opinions
                        - Format as {"expert": "Name/Title", "quote": "Exact quote"}
-                       - If no direct quotes, look for paraphrased expert opinions
 
-                    6. REQUIRED - Relevance Score (0.0-1.0):
-                       - Based on content relevance to query
-                       - Consider depth and specificity
+                    10. REQUIRED - Relevance Score (0.0-1.0):
+                        - Based on content relevance to query and depth of information
 
                     Return as JSON matching exactly this schema:
                     {
-                        "main_points": ["point1", "point2", ...], // MINIMUM 10 points
+                        "main_points": ["point1", "point2", ...],
                         "summary": "text",
+                        "background": "text",
+                        "key_findings": ["finding1", "finding2", ...],
+                        "implications": "text",
+                        "key_quotes": ["quote1", "quote2", ...],
                         "key_statistics": ["stat1", "stat2", ...],
                         "practical_tips": ["tip1", "tip2", ...],
                         "expert_opinions": [{"expert": "name", "quote": "text"}, ...],
@@ -153,6 +180,10 @@ class MiniProcessor:
                 "summary": {
                     "main_points": analysis.main_points,
                     "summary": analysis.summary,
+                    "background": analysis.background,
+                    "key_findings": analysis.key_findings,
+                    "implications": analysis.implications,
+                    "key_quotes": analysis.key_quotes,
                     "key_statistics": analysis.key_statistics,
                     "practical_tips": analysis.practical_tips,
                     "expert_opinions": analysis.expert_opinions
@@ -260,7 +291,7 @@ class MiniProcessor:
 
     def _extract_key_findings(self, articles: List[Dict]) -> List[str]:
         """Extract overall key findings from processed articles, incorporating temporal context"""
-        all_points = []
+        all_findings = []
         
         # Sort articles by publication date for temporal context
         sorted_articles = sorted(articles, 
@@ -268,7 +299,12 @@ class MiniProcessor:
                                reverse=True)
         
         for article in sorted_articles:
-            points = article['summary']['main_points']
+            # Prefer the new key_findings field if available, otherwise fall back to main_points
+            findings = article['summary'].get('key_findings', [])
+            if not findings and 'main_points' in article['summary']:
+                # If key_findings is empty, use some of the main_points instead
+                findings = article['summary']['main_points'][:3]  # Take just the first few as key findings
+                
             metadata = article.get('metadata', {})
             pub_date = metadata.get('published_date', '')
             
@@ -277,17 +313,17 @@ class MiniProcessor:
                 try:
                     # Convert to datetime for comparison
                     pub_dt = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z')
-                    # Add temporal context to first point from each article
-                    if points:
-                        points[0] = f"As of {pub_dt.strftime('%B %d, %Y')}: {points[0]}"
+                    # Add temporal context to first finding from each article
+                    if findings:
+                        findings[0] = f"As of {pub_dt.strftime('%B %d, %Y')}: {findings[0]}"
                 except (ValueError, TypeError):
                     pass
                     
-            all_points.extend(points)
+            all_findings.extend(findings)
         
         # Remove duplicates while preserving order
-        unique_points = list(dict.fromkeys(all_points))
-        return unique_points[:10]  # Return top 10 findings
+        unique_findings = list(dict.fromkeys(all_findings))
+        return unique_findings[:15]  # Return top 15 findings (increased from 10)
         
     def generate_blog_summary(self, session_id: str) -> Dict:
         """
@@ -351,8 +387,17 @@ Your response must be a valid JSON object with the following structure:
                     {"role": "user", "content": f"""
                     Create a comprehensive blog post about {topic} based on the following research:
                     
+                    Background Information:
+                    {content['background']}
+                    
                     Key findings from {len(articles)} articles:
                     {chr(10).join([f"- {finding}" for finding in content['key_findings']])}
+                    
+                    Implications:
+                    {content['implications']}
+                    
+                    Key quotes:
+                    {chr(10).join([f"- {quote}" for quote in content['key_quotes']])}
                     
                     Key statistics:
                     {chr(10).join([f"- {stat}" for stat in content['statistics']])}
