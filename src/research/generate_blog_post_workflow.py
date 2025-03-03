@@ -12,7 +12,9 @@ then printed to the console.
 import sys
 import logging
 import os
-from openai import OpenAI
+# Import the OpenAI class dynamically in the generate_blog_post function
+# to prevent issues with external patches or modifications
+# from openai import OpenAI
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import List
@@ -189,7 +191,22 @@ def generate_blog_post(prompt):
         logger.info(f"Original prompt token count: {token_count}")
         logger.info(f"Chunking result: {len(chunks)} chunks created")
         
-        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # Initialization of the OpenAI client - without parameters that may cause problems
+        try:
+            # Remove OpenAI import at the module level and import it locally
+            # Local import will help avoid any external modifications
+            from openai import OpenAI
+            # Create client only with API key, without any additional parameters
+            client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            
+            # Check if the client works correctly
+            if not hasattr(client, 'chat'):
+                raise AttributeError("OpenAI client does not have 'chat' attribute")
+            
+            logger.info("OpenAI client initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI client: {e}")
+            raise
         
         if len(chunks) > 1:
             logger.info(f"Prompt split into {len(chunks)} chunks. Processing separately.")

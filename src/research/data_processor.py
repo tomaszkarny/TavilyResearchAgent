@@ -3,8 +3,8 @@
 from typing import List, Dict, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from openai import OpenAI
 import logging
+import os
 from .database.db import ResearchDatabase
 from .exceptions import ProcessingError
 from .utils import retry
@@ -49,12 +49,38 @@ class MiniProcessor:
     
     def __init__(self):
         self.db = ResearchDatabase()
-        self.client = OpenAI()
         self.model = "gpt-4o-mini-2024-07-18"
+        
+        # Import OpenAI on-the-fly to ensure we're using the latest version
+        # In newer versions of OpenAI (>=1.55.3) with httpx 0.28, previous issues are properly handled
+        try:
+            # Use direct import to ensure we avoid monkey-patching
+            from openai import OpenAI
+            self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            
+            # Check if the client works correctly
+            # Try accessing the chat attribute - this is what causes an error in the process_article method
+            if not hasattr(self.client, 'chat'):
+                raise AttributeError("OpenAI client does not have 'chat' attribute")
+                
+            logger.info("OpenAI client initialized successfully.")
+        except Exception as e:
+            # Leave the client as None, but add information that the client is unavailable
+            logger.error(f"Failed to initialize OpenAI client: {e}")
+            self.client = None
+            self.api_available = False
+        else:
+            self.api_available = True
     
     @retry(max_attempts=3, delay=1)
     def process_article(self, content: str, title: str, url: str, metadata: Optional[Dict] = None) -> Dict:
         """Process single article using structured outputs"""
+        # Check if the OpenAI client is available before attempting to process
+        if not self.client or not hasattr(self, 'api_available') or not self.api_available:
+            error_msg = "OpenAI API client is not available. Check API key and configuration."
+            logger.error(error_msg)
+            raise ProcessingError(error_msg)
+            
         try:
             messages = [
                 {

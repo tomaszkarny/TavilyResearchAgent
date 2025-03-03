@@ -13,7 +13,7 @@ import logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Rozszerzone predefiniowane źródła
+# Extended predefined sources
 PREDEFINED_SOURCES = {
     "1": {
         "name": "Medical Research",
@@ -292,10 +292,10 @@ def main():
             parameters = get_search_parameters()
         else:
             parameters = {
-        'max_results': 10, 
-        'min_score': 0.6,
-        'topic': 'news',
-        'days': 7  # Default to last 7 days
+                'max_results': 10, 
+                'min_score': 0.6,
+                'topic': 'news',
+                'days': 7  # Default to last 7 days
             }
             logger.info("Using default parameters with news configuration:")
             logger.info(f"Topic: {parameters['topic']}")
@@ -305,7 +305,11 @@ def main():
         
         # 1. Perform research
         logger.info(f"\nInitiating research for: {query}")
-        session_id = manager.perform_research(query, **parameters)
+        try:
+            session_id = manager.perform_research(query, **parameters)
+        except SearchError as e:
+            print(f"\nSearch failed: {str(e)}")
+            return
         
         print("\nResearch complete!")
         print("Data is saved and ready for processing")
@@ -347,34 +351,32 @@ def main():
                     print("\nWould you like to generate a blog post from the processed data? (y/n)")
                     if input().strip().lower().startswith('y'):
                         print("\nGenerating blog post...")
-                        blog_content = processor.generate_blog_summary(processed_session)
-                        
-                        print("\nBlog Post Generated:")
-                        print(f"\nTitle: {blog_content['title']}")
-                        print("\nIntroduction:")
-                        print(blog_content['introduction'][:200] + "...")
-                        
-                        print("\nKey Sections:")
-                        for section in blog_content['key_sections']:
-                            print(f"\n- {section['heading']}")
-                            print(f"  {section['content'][:100]}...")
-                        
-                        print("\nConclusion:")
-                        print(blog_content['conclusion'][:200] + "...")
-                        
-                        print("\nBlog post has been generated and saved to the database.")
+                        try:
+                            blog_content = processor.generate_blog_summary(processed_session)
+                            print("\nBlog Post Generated:")
+                            print(f"\nTitle: {blog_content['title']}")
+                            print("\nIntroduction:")
+                            print(blog_content['introduction'][:200] + "...")
+                            print("\nKey Sections:")
+                            for section in blog_content['key_sections']:
+                                print(f"\n- {section['heading']}")
+                                print(f"  {section['content'][:100]}...")
+                            print("\nConclusion:")
+                            print(blog_content['conclusion'][:200] + "...")
+                            print("\nBlog post has been generated and saved to the database.")
+                        except ProcessingError as e:
+                            print(f"\nBlog generation failed: {str(e)}")
                 
-                    # Po przetworzeniu artykułów
-                    print("\nWould you like to see the processed data? (y/n)")
-                    if input().strip().lower().startswith('y'):
-                        display_processed_data(processed_session)
-                
+                # Display processed data
+                print("\nWould you like to see the processed data? (y/n)")
+                if input().strip().lower().startswith('y'):
+                    display_processed_data(processed_session)
             except ProcessingError as e:
-                print(f"\nError during processing: {e}")
+                print(f"\nArticle processing failed: {str(e)}")
                 return
                 
     except Exception as e:
-        print(f"\nError: {str(e)}")
+        print(f"\nAn unexpected error occurred: {str(e)}")
 
 if __name__ == "__main__":
     main()
