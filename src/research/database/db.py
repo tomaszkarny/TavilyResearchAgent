@@ -50,20 +50,23 @@ class ResearchDatabase:
             raise
 
     def _format_date(self, date_str: Optional[str]) -> str:
-        """Format date string to standard format"""
+        """Format date string to ISO 8601 format"""
         if not date_str:
-            return 'N/A'
+            return datetime.utcnow().isoformat() + 'Z'
         try:
             # Handle different date formats
-            for fmt in ['%Y-%m-%dT%H:%M:%S', '%a, %d %b %Y %H:%M:%S GMT']:
+            for fmt in ['%Y-%m-%dT%H:%M:%S', '%a, %d %b %Y %H:%M:%S GMT', '%Y-%m-%d']:
                 try:
                     dt = datetime.strptime(date_str, fmt)
-                    return dt.strftime('%a, %d %b %Y %H:%M:%S GMT')
+                    return dt.isoformat() + 'Z'
                 except ValueError:
                     continue
-            return date_str
-        except Exception:
-            return date_str
+            # If parsing fails, return original string with warning
+            logger.warning(f"Could not parse date: {date_str}, returning as is with UTC")
+            return date_str + 'Z'
+        except Exception as e:
+            logger.error(f"Error formatting date {date_str}: {e}")
+            return datetime.utcnow().isoformat() + 'Z'
     
     def save_research_session(self, results: List[Dict], query: str) -> str:
         """
@@ -102,8 +105,8 @@ class ResearchDatabase:
                 processed_metadata = {
                     'source': metadata.get('source', 'web'),
                     'published_date': self._format_date(result.get('published_date')),
-                    'retrieved_at': datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'),
-                    'added_date': datetime.utcnow().isoformat(),
+                    'retrieved_at': datetime.utcnow().isoformat() + 'Z',
+                    'added_date': datetime.utcnow().isoformat() + 'Z',
                     'score': result.get('score', 0),
                     'author': metadata.get('author', 'N/A'),
                     'language': metadata.get('language', 'N/A'),
