@@ -347,25 +347,8 @@ def main():
                     if session_data.get('processed_data'):
                         display_processing_stats(session_data)
                     
-                    # 4. Ask about blog generation
-                    print("\nWould you like to generate a blog post from the processed data? (y/n)")
-                    if input().strip().lower().startswith('y'):
-                        print("\nGenerating blog post...")
-                        try:
-                            blog_content = processor.generate_blog_summary(processed_session)
-                            print("\nBlog Post Generated:")
-                            print(f"\nTitle: {blog_content['title']}")
-                            print("\nIntroduction:")
-                            print(blog_content['introduction'][:200] + "...")
-                            print("\nKey Sections:")
-                            for section in blog_content['key_sections']:
-                                print(f"\n- {section['heading']}")
-                                print(f"  {section['content'][:100]}...")
-                            print("\nConclusion:")
-                            print(blog_content['conclusion'][:200] + "...")
-                            print("\nBlog post has been generated and saved to the database.")
-                        except ProcessingError as e:
-                            print(f"\nBlog generation failed: {str(e)}")
+                    # Note: Blog post generation moved to separate workflow
+                    # Use generate_blog_post_workflow.py with session ID for blog generation
                 
                 # Display processed data
                 print("\nWould you like to see the processed data? (y/n)")

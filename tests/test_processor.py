@@ -3,7 +3,7 @@ Test script for data processing and blog generation
 """
 import logging
 from src.research.data_processor import MiniProcessor
-from src.research.blog_generator import BlogPostGenerator
+# Removed blog_generator import since we now use generate_blog_post_workflow.py
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -13,9 +13,8 @@ def test_processing_flow():
     """Test the complete processing flow"""
     session_id = "673fb8cf7a721f3920df8e96"  # Our session ID
     
-    # Initialize processors
+    # Initialize processor
     data_processor = MiniProcessor()
-    blog_generator = BlogPostGenerator()
     
     try:
         # 1. Get processed research data
@@ -34,10 +33,9 @@ def test_processing_flow():
         md_export = data_processor.export_for_blog(session_id, 'markdown')
         print(md_export)
         
-        # 3. Generate blog prompt
-        print("\n=== Blog Post Prompt ===")
-        blog_prompt = blog_generator.generate_blog_prompt(session_id)
-        print(blog_prompt)
+        # Note: Blog post generation moved to generate_blog_post_workflow.py
+        print("\n=== Blog Post Workflow ===")
+        print("Blog post generation is now handled by generate_blog_post_workflow.py")
         
     except Exception as e:
         logger.error(f"Test failed: {str(e)}")
