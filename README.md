@@ -1,4 +1,4 @@
-# TavilyResearchAgent (Wavily Integration)
+# TavilyResearchAgent (Tavily Integration)
 
 A powerful research agent that leverages Tavily's API for web search combined with GPT-4o-mini for content processing, summarization, and blog post generation. This tool automates the research process by gathering relevant articles, extracting key insights, and generating comprehensive blog posts from search results.
 
