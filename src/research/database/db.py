@@ -5,7 +5,8 @@ Applied: codeStructure_001, codeStructure_003
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import logging
-from pymongo import ASCENDING, TEXT
+from pymongo import ASCENDING, TEXT, UpdateOne
+import pymongo
 from bson.objectid import ObjectId
 from ..exceptions import DatabaseError
 from .db_connection import get_db, get_collection
@@ -295,6 +296,60 @@ class ResearchDatabase:
         except Exception as e:
             logger.error(f"Error getting articles: {e}")
             return []
+            
+    def save_processed_articles(self, processed_articles: List[Dict]) -> int:
+        """
+        Save multiple processed articles at once using bulk operations
+        
+        Args:
+            processed_articles: List of processed article documents
+            
+        Returns:
+            int: Number of articles saved
+            
+        Raises:
+            DatabaseError: If bulk operation fails
+        """
+        try:
+            if not processed_articles:
+                logger.warning("No processed articles to save")
+                return 0
+                
+            # Prepare bulk update operations
+            bulk_operations = []
+            for article in processed_articles:
+                if 'url' not in article or 'session_id' not in article:
+                    logger.warning("Skipping article without URL or session_id")
+                    continue
+                    
+                # Update or insert the article
+                bulk_operations.append(
+                    {
+                        "filter": {
+                            "url": article['url'],
+                            "session_id": article['session_id']
+                        },
+                        "update": {"$set": article},
+                        "upsert": True
+                    }
+                )
+            
+            # Execute bulk write operation if there are operations to perform
+            if bulk_operations:
+                result = self.articles.bulk_write([
+                    pymongo.UpdateOne(**op) for op in bulk_operations
+                ])
+                
+                logger.info(f"Bulk saved {len(bulk_operations)} processed articles. "
+                           f"Modified: {result.modified_count}, Upserted: {result.upserted_count}")
+                return len(bulk_operations)
+            
+            return 0
+            
+        except Exception as e:
+            error_msg = f"Error in bulk saving processed articles: {e}"
+            logger.error(error_msg)
+            raise DatabaseError(error_msg)
     
     def text_search(self, query: str, limit: int = 5) -> List[Dict]:
         """

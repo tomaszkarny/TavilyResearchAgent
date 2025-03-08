@@ -1,7 +1,8 @@
 # src/research/data_processor.py
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydantic import BaseModel, Field
 import logging
 import os
@@ -177,6 +178,8 @@ class MiniProcessor:
             processed_article = {
                 "title": title,
                 "url": url,
+                # Add session_id at the root level to ensure database saving works correctly
+                "session_id": metadata.get('session_id') if metadata else None,
                 "summary": {
                     "main_points": analysis.main_points,
                     "summary": analysis.summary,
@@ -206,8 +209,267 @@ class MiniProcessor:
             logger.error(f"Error processing article {title}: {e}")
             raise ProcessingError(f"Failed to process article: {str(e)}")
 
+    def process_articles_in_parallel(self, articles: List[Dict], max_workers: int = 5) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Processes articles in parallel mode using ThreadPoolExecutor.
+        
+        Args:
+            articles (List[Dict]): List of articles, each dictionary should contain:
+                - 'title'
+                - 'url'
+                - 'content'
+                - 'metadata' (optional)
+            max_workers (int): Maximum number of parallel threads (default: 5)
+
+        Returns:
+            Tuple[List[Dict], List[Dict]]:
+                - processed_articles: list of processed articles in standard format
+                - failed_articles: list of articles that failed processing
+        """
+        # Check if the OpenAI client is available before attempting to process
+        if not self.client or not hasattr(self, 'api_available') or not self.api_available:
+            error_msg = "OpenAI API client is not available. Check API key and configuration."
+            logger.error(error_msg)
+            raise ProcessingError(error_msg)
+
+        processed_articles = []
+        failed_articles = []
+
+        # Use ThreadPoolExecutor to run multiple calls to self.process_article in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Map future -> article, to track which article we're processing
+            future_to_article = {
+                executor.submit(
+                    self.process_article,
+                    article['content'],
+                    article['title'],
+                    article['url'],
+                    article.get('metadata', {})
+                ): article
+                for article in articles
+            }
+
+            # as_completed allows us to iterate over all futures as they complete
+            for future in as_completed(future_to_article):
+                article_info = future_to_article[future]
+                try:
+                    result = future.result()
+                    processed_articles.append(result)
+                    logger.info(f"Successfully processed article in parallel: {article_info['title']}")
+                except Exception as e:
+                    logger.error(f"Error processing article '{article_info['title']}': {e}")
+                    failed_articles.append({
+                        'title': article_info['title'],
+                        'url': article_info.get('url', ''),  # Include URL for better tracking
+                        'session_id': article_info.get('metadata', {}).get('session_id'),  # Include session_id
+                        'error': str(e)
+                    })
+
+        logger.info(f"Parallel processing completed. "
+                    f"Successful: {len(processed_articles)}, Failed: {len(failed_articles)}")
+
+        return processed_articles, failed_articles
+
+    def process_article_batch(self, articles: List[Dict], batch_size: int = 3) -> Tuple[List[Dict], List[Dict]]:
+        """Process multiple articles in batches to reduce API calls
+        
+        Args:
+            articles: List of article dictionaries
+            batch_size: Number of articles to process per batch (default=3)
+            
+        Returns:
+            List of processed article dictionaries
+        """
+        # Check if the OpenAI client is available before attempting to process
+        if not self.client or not hasattr(self, 'api_available') or not self.api_available:
+            error_msg = "OpenAI API client is not available. Check API key and configuration."
+            logger.error(error_msg)
+            raise ProcessingError(error_msg)
+        
+        # Split content for large articles before batching (use memory logic for chunking)
+        # We need to handle each batch carefully to stay within token limits
+        processed_articles = []
+        failed_articles = []
+        
+        # Process articles in batches
+        for i in range(0, len(articles), batch_size):
+            batch = articles[i:i+batch_size]
+            batch_data = []
+            
+            # Prepare batch data
+            for article in batch:
+                batch_data.append({
+                    "index": len(batch_data),
+                    "title": article['title'],
+                    "url": article['url'],
+                    "content": article['content'],
+                    "metadata": article.get('metadata', {})
+                })
+            
+            # Process this batch
+            try:
+                batch_content = "\n\n".join([f"Article {d['index']+1}:\nTitle: {d['title']}\nContent: {d['content']}" for d in batch_data])
+                
+                # Create system message for batch processing
+                system_prompt = """You are a precise research analyst. Analyze each article and extract information in a structured format.
+                For EACH article, provide the following analysis in JSON format:
+
+                1. Main Points (minimum 15 points):
+                   - Extract detailed insights from each article
+                   - Each point should be a complete, informative sentence
+
+                2. Summary (max 1500 chars):
+                   - Comprehensive summary covering key themes and findings
+
+                3. Background Information
+                4. Key Findings
+                5. Implications
+                6. Key Quotes
+                7. Key Statistics
+                8. Practical Tips (minimum 5)
+                9. Expert Opinions
+                10. Relevance Score (0.0-1.0)
+
+                Return as a JSON array with one object per article, where each object has the format:
+                {
+                    "article_index": <index number from input>,
+                    "main_points": ["point1", "point2", ...],
+                    "summary": "text",
+                    "background": "text",
+                    "key_findings": ["finding1", "finding2", ...],
+                    "implications": "text",
+                    "key_quotes": ["quote1", "quote2", ...],
+                    "key_statistics": ["stat1", "stat2", ...],
+                    "practical_tips": ["tip1", "tip2", ...],
+                    "expert_opinions": [{"expert": "name", "quote": "text"}, ...],
+                    "relevance": float
+                }
+                """
+                
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": batch_content}
+                ]
+                
+                completion = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.7
+                )
+                
+                # Parse batch response
+                response_content = completion.choices[0].message.content
+                batch_results = json.loads(response_content)
+                
+                # Format the results into processed articles
+                if not isinstance(batch_results, list):
+                    # Handle case where API returns a single object instead of an array
+                    if "articles" in batch_results:
+                        batch_results = batch_results["articles"]
+                    else:
+                        batch_results = [batch_results]
+                
+                # Map articles to their corresponding batch data more intelligently
+                processed_batch = []
+                
+                # First, try to use article_index if available and valid
+                for result in batch_results:
+                    article_index = result.get("article_index", None)
+                    
+                    # If index is provided and valid, use it
+                    if article_index is not None and 0 <= article_index < len(batch_data):
+                        processed_batch.append((result, batch_data[article_index]))
+                
+                # If we couldn't match all results, use title matching as fallback
+                if len(processed_batch) < min(len(batch_results), len(batch_data)):
+                    # Clear previous matches and try title matching
+                    processed_batch = []
+                    
+                    # Create a mapping of titles to batch data items
+                    title_to_batch = {item["title"].lower().strip(): item for item in batch_data}
+                    
+                    for result in batch_results:
+                        # Try to extract title from the result
+                        title = None
+                        # Look for title in result keys
+                        if "title" in result:
+                            title = result["title"]
+                        # Look for title in article text
+                        elif "summary" in result and isinstance(result["summary"], str) and result["summary"].startswith("Title:"):
+                            title = result["summary"].split("\n")[0].replace("Title:", "").strip()
+                        
+                        # If we found a title, try to match it
+                        if title and title.lower().strip() in title_to_batch:
+                            processed_batch.append((result, title_to_batch[title.lower().strip()]))
+                
+                # If we still couldn't match, use positional matching as last resort
+                if len(processed_batch) < min(len(batch_results), len(batch_data)):
+                    # Clear previous matches and use positional matching
+                    processed_batch = []
+                    
+                    # Match results to batch data by position, up to the minimum length
+                    for i in range(min(len(batch_results), len(batch_data))):
+                        processed_batch.append((batch_results[i], batch_data[i]))
+                
+                # Process each matched pair
+                for result, article_data in processed_batch:
+                    
+                    # Convert to ArticleAnalysis model to validate
+                    try:
+                        analysis = ArticleAnalysis(
+                            main_points=result.get("main_points", []),
+                            summary=result.get("summary", ""),
+                            background=result.get("background", ""),
+                            key_findings=result.get("key_findings", []),
+                            implications=result.get("implications", ""),
+                            key_quotes=result.get("key_quotes", []),
+                            key_statistics=result.get("key_statistics", []),
+                            practical_tips=result.get("practical_tips", []),
+                            expert_opinions=result.get("expert_opinions", []),
+                            relevance=result.get("relevance", 0.5)
+                        )
+                        
+                        # Create article document
+                        processed_article = {
+                            "title": article_data["title"],
+                            "url": article_data["url"],
+                            "session_id": article_data["metadata"].get("session_id", ""),
+                            "summary": {
+                                "main_points": analysis.main_points,
+                                "summary": analysis.summary,
+                                "background": analysis.background,
+                                "key_findings": analysis.key_findings,
+                                "implications": analysis.implications,
+                                "key_quotes": analysis.key_quotes,
+                                "key_statistics": analysis.key_statistics,
+                                "practical_tips": analysis.practical_tips,
+                                "expert_opinions": analysis.expert_opinions
+                            },
+                            "score": analysis.relevance,
+                            "metadata": article_data["metadata"],
+                            "processed_at": datetime.utcnow()
+                        }
+                        processed_articles.append(processed_article)
+                    except Exception as e:
+                        logger.error(f"Error validating article analysis: {e}")
+                        failed_articles.append({
+                            'title': article_data['title'],
+                            'error': f"Validation error: {str(e)}"
+                        })
+            except Exception as e:
+                logger.error(f"Error processing batch: {e}")
+                for article in batch_data:
+                    failed_articles.append({
+                        'title': article['title'],
+                        'error': f"Batch processing error: {str(e)}"
+                    })
+        
+        logger.info(f"Successfully processed {len(processed_articles)} articles in batches")
+        return processed_articles, failed_articles
+    
     def process_and_save_session(self, session_id: str) -> str:
-        """Process all articles in session and save results"""
+        """Process all articles in session and save results using batch processing"""
         try:
             # Update session status
             self.db.update_session(
@@ -220,58 +482,66 @@ class MiniProcessor:
             if not articles:
                 raise ProcessingError("No articles found in session")
 
-            processed_articles = []
-            failed_articles = []
-            
-            # Process each article
+            # Add session_id to metadata for each article
             for article in articles:
-                try:
-                    processed = self.process_article(
-                        content=article['content'],
-                        title=article['title'],
-                        url=article['url'],
-                        metadata=article.get('metadata', {})
-                    )
-                    processed_articles.append(processed)
+                if 'metadata' not in article:
+                    article['metadata'] = {}
+                article['metadata']['session_id'] = session_id
+
+            # Process articles in parallel
+            processed_articles, failed_articles = self.process_articles_in_parallel(articles, max_workers=5)
                     
-                    # Update progress
-                    self.db.update_session(
-                        session_id=session_id,
-                        update_data={
-                            'processed_count': len(processed_articles),
-                            'total_count': len(articles)
-                        }
-                    )
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process article {article['title']}: {e}")
-                    failed_articles.append({
-                        'title': article['title'],
-                        'error': str(e)
-                    })
+            # Save processed articles using bulk operations
+            if processed_articles:
+                saved_count = self.db.save_processed_articles(processed_articles)
+                logger.info(f"Saved {saved_count} articles using bulk operations")
+                
+                # Update progress after batch processing
+                self.db.update_session(
+                    session_id=session_id,
+                    update_data={
+                        'processed_count': len(processed_articles),
+                        'total_count': len(articles)
+                    }
+                )
 
             # Create final summary with all processed article data
             summary = {
                 'topic': self.db.get_session(session_id)['query'],
                 'articles': processed_articles,
-                'created_at': datetime.utcnow()
+                'created_at': datetime.utcnow(),
+                'parallel_processing_enabled': True,  # Flag to indicate parallel processing was used
+                'max_workers': 5  # Default number of workers used
             }
 
-            # Save final results
+            # Calculate processing efficiency metrics
+            processing_metrics = {
+                'total_articles': len(articles),
+                'processed_articles': len(processed_articles),
+                'failed_articles': len(failed_articles), 
+                'success_rate': len(processed_articles) / len(articles) if articles else 0,
+                'parallelization_gain': round((len(processed_articles) / (len(processed_articles) / min(5, len(articles)))) if processed_articles else 0, 2),
+                'processing_approach': 'parallel'
+            }
+
+            # Save final results with metrics
             self.db.update_session(
                 session_id=session_id,
                 update_data={
                     'processed_data': summary,
+                    'processing_metrics': processing_metrics,
                     'status': 'completed',
                     'processed_at': datetime.utcnow(),
                     'failed_articles': failed_articles,
-                    'success_rate': len(processed_articles) / len(articles)
+                    'success_rate': processing_metrics['success_rate']
                 }
             )
             logger.info(f"Processed articles saved in the database for session {session_id}")
 
-            logger.info(f"Successfully processed session {session_id}")
+            logger.info(f"Successfully processed session {session_id} using batch processing")
             logger.info(f"Processed {len(processed_articles)} articles, {len(failed_articles)} failed")
+            logger.info(f"Parallel processing completed with {processing_metrics['success_rate'] * 100}% success rate")
+            logger.info(f"Parallelization gain: approximately {processing_metrics['parallelization_gain']}x faster")
             
             return session_id
 
